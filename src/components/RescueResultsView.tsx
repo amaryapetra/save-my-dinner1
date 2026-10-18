@@ -105,15 +105,20 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
     }
   };
 
-  // Guard: If uploaded image is not food (e.g. keyboard, pet, random object)
+  // Guard: If uploaded image is not food (e.g. selfie, keyboard, pet, random object)
   if (diagnosis.isFoodDetected === false) {
+    const isSelfie =
+      diagnosis.foodIdentified?.toLowerCase().includes('selfie') ||
+      diagnosis.nonFoodReason?.toLowerCase().includes('selfie') ||
+      diagnosis.nonFoodReason?.toLowerCase().includes('person');
+
     return (
       <div className="w-full max-w-xl mx-auto space-y-5 animate-fade-in pb-16">
         <div className="bg-white rounded-3xl p-6 sm:p-8 border border-amber-200 text-center space-y-4 shadow-sm">
           {/* Fun Playful Illustrated Camera Reticle with question mark */}
           <div className="w-20 h-20 mx-auto relative flex items-center justify-center">
             <div className="w-20 h-20 rounded-full bg-amber-50 border-2 border-amber-300 flex items-center justify-center">
-              <span className="text-3xl">🧐</span>
+              <span className="text-3xl">{isSelfie ? '🤳' : '🧐'}</span>
             </div>
             <span className="absolute -top-1 -right-1 bg-amber-500 text-white rounded-full p-1.5 shadow-xs">
               <Camera className="w-4 h-4" />
@@ -122,13 +127,15 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
 
           <div className="space-y-2">
             <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
-              No Food Detected
+              {isSelfie ? 'Selfie Detected' : 'No Food Detected'}
             </span>
             <h2 className="text-2xl font-serif font-bold text-stone-900">
-              Oops, that doesn't look like food!
+              {isSelfie ? 'Nice selfie, but we need to see your food!' : "Oops, that doesn't look like food!"}
             </h2>
             <p className="text-stone-600 text-sm max-w-md mx-auto leading-relaxed">
-              {diagnosis.diagnosis || "We couldn't spot any food, pan, or cooking in this picture. Please aim your camera at your pot, pan, or plate!"}
+              {diagnosis.diagnosis || (isSelfie
+                ? "Our kitchen helper can only diagnose what's cooking on the stove or counter! Please aim your back camera down at your pot, pan, or plate."
+                : "We couldn't spot any food, pan, or cooking in this picture. Please aim your camera at your pot, pan, or plate!")}
             </p>
           </div>
 
@@ -139,7 +146,7 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
                 <img src={originalImage} alt="Uploaded item" className="w-full h-full object-cover" />
               </div>
               <span className="text-[11px] text-stone-500 mt-1.5 block">
-                {diagnosis.nonFoodReason || "Uploaded photo"}
+                {diagnosis.nonFoodReason || (isSelfie ? 'Selfie photo' : 'Uploaded photo')}
               </span>
             </div>
           )}
@@ -151,7 +158,7 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
               className="w-full sm:w-auto px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold text-sm shadow-md transition active:scale-95 flex items-center justify-center space-x-2 cursor-pointer"
             >
               <Camera className="w-4 h-4" />
-              <span>Snap Your Real Food</span>
+              <span>{isSelfie ? 'Snap Your Food (Back Camera)' : 'Snap Your Real Food'}</span>
             </button>
             <button
               onClick={onStartOver}

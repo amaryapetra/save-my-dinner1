@@ -58,6 +58,17 @@ Your purpose: A home cook is cooking right now with a dish going wrong. They nee
 CRITICAL OPERATIONAL RULES:
 0. FOOD VERIFICATION GUARDRAIL (STRICT FIRST STEP):
    - If a photo is attached, FIRST check whether it actually shows food, cooking ingredients, pots, pans, skillets, plates, or kitchen food prep.
+   - IF THE PHOTO IS A SELFIE, PERSON, HUMAN FACE, BODY, PORTRAIT, OR HEADSHOT:
+     * A human face or selfie is NEVER food!
+     * You MUST set isFoodDetected: false
+     * Set foodIdentified: "No Food Detected (Selfie/Person)"
+     * Set canBeSaved: false
+     * Set nonFoodReason: "This picture shows a selfie or person, not food or cookware."
+     * Set diagnosis: "Nice selfie! But our kitchen troubleshooter only rescues food. Please point your camera down at the pot, pan, or plate so we can help save your meal!"
+     * Set rescuePlan: []
+     * Set howToKnowItsWorking: []
+     * Set preventionTip: "Aim your camera directly at your pan, pot, or food."
+     * NEVER hallucinate cooking problems or pretend a human face needs seasoning or cooking steps!
    - If the photo shows a NON-FOOD object (such as a computer keyboard, mouse, laptop, desk, pet, car, room furniture, screen, or random inanimate object):
      * You MUST set isFoodDetected: false
      * Set foodIdentified: "No Food Detected"
@@ -90,7 +101,7 @@ const RESCUE_SCHEMA = {
   properties: {
     isFoodDetected: {
       type: Type.BOOLEAN,
-      description: 'True if photo shows food, ingredients, or cooking utensils/pots/pans. False if photo shows a keyboard, computer, pet, furniture, or non-food object.',
+      description: 'Must be FALSE if photo is a selfie, person, human face, headshot, portrait, keyboard, screen, pet, furniture, or non-food object. True ONLY if clear food, ingredients, or cooking cookware is visible.',
     },
     nonFoodReason: {
       type: Type.STRING,
@@ -136,6 +147,23 @@ function generateFallbackCulinaryRescue(
   hasImage = false
 ): RescueResponse {
   const query = `${problemDescription} ${issueCategory} ${dishName}`.toLowerCase();
+
+  // Selfie / Person detection fallback
+  const selfieKeywords = ['selfie', 'face', 'person', 'portrait', 'headshot', 'photo of me', 'picture of me', 'human', 'me in photo', 'my face'];
+  if (selfieKeywords.some((kw) => query.includes(kw))) {
+    return {
+      isFoodDetected: false,
+      nonFoodReason: 'This picture appears to be a selfie or photo of a person, not food or cooking.',
+      foodIdentified: 'No Food Detected (Selfie)',
+      visibleObservation: 'Selfie or human face detected instead of cooking food.',
+      diagnosis: 'Nice selfie! But our kitchen troubleshooter only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!',
+      urgencyLevel: 'calm',
+      canBeSaved: false,
+      rescuePlan: [],
+      howToKnowItsWorking: [],
+      preventionTip: 'Point your camera down at your pan or food.',
+    };
+  }
 
   // Non-food detection fallback
   const nonFoodKeywords = ['keyboard', 'laptop', 'mouse', 'desk', 'computer', 'screen', 'dog', 'cat', 'car', 'phone', 'shoe', 'clothing'];
@@ -380,7 +408,16 @@ Has Photo Attached: ${hasImage ? 'YES (Examine the image)' : 'NO (User only ente
 CRITICAL RULES FOR THIS REQUEST:
 ${
   hasImage
-    ? '1. The user attached a photo. In visibleObservation, describe the directly visible cues you see in the food photo.'
+    ? `1. FIRST CHECK FOR FOOD: Does this image clearly show food, cooking ingredients, pots, pans, or a meal?
+       - If the photo is a SELFIE, PERSON, HUMAN FACE, HEADSHOT, BODY, keyboard, computer screen, pet, furniture, or non-food item:
+         YOU MUST SET isFoodDetected: false!
+         Set foodIdentified: "No Food Detected (Selfie/Non-Food)"
+         Set nonFoodReason: "This is a selfie or picture of a person, not food or cooking."
+         Set diagnosis: "Nice selfie! But our kitchen helper only rescues food. Please point your camera down at the pot, pan, or plate so we can help fix your meal!"
+         Set canBeSaved: false
+         Set rescuePlan: []
+         Set howToKnowItsWorking: []
+       - ONLY if clear food, ingredients, or a cooking pan is visible, set isFoodDetected: true and provide rescue steps.`
     : '1. IMPORTANT: The user DID NOT ATTACH A PHOTO. In visibleObservation, do NOT claim to see a photo or say "what we see". Instead, write: "Reported by cook: <brief summary of what they said happened>".'
 }
 2. Output structured JSON matching the schema with simple everyday words only.`;
@@ -406,13 +443,55 @@ ${
         });
 
         const rawText = response.text || '{}';
+        console.log(`[Gemini Response for ${modelName}]:`, rawText);
         parsedData = JSON.parse(rawText);
-        if (parsedData && parsedData.rescuePlan?.length) {
+        if (parsedData && (parsedData.isFoodDetected === false || parsedData.rescuePlan?.length)) {
           break;
         }
       } catch (err: any) {
         // Attempt fallback model or instant culinary rescue protocol
         continue;
+      }
+    }
+
+    // Server-side safety interceptor for selfies or non-food objects
+    if (parsedData) {
+      const textCorpus = `${parsedData.foodIdentified || ''} ${parsedData.visibleObservation || ''} ${parsedData.diagnosis || ''} ${parsedData.nonFoodReason || ''}`.toLowerCase();
+      const personWords = [
+        'selfie',
+        'human face',
+        'face of a person',
+        'person looking',
+        'portrait of',
+        'headshot',
+        'person smiling',
+        'someone smiling',
+        'a selfie',
+        'no food detected',
+        'keyboard',
+        'computer keyboard',
+        'laptop',
+        'desk',
+        'mouse',
+        'screen',
+      ];
+
+      const isNonFoodMention = personWords.some((w) => textCorpus.includes(w));
+      if (isNonFoodMention || parsedData.isFoodDetected === false || String(parsedData.isFoodDetected) === 'false') {
+        const isSelfie = textCorpus.includes('selfie') || textCorpus.includes('face') || textCorpus.includes('person') || textCorpus.includes('portrait') || textCorpus.includes('headshot') || textCorpus.includes('smiling');
+        parsedData.isFoodDetected = false;
+        parsedData.canBeSaved = false;
+        parsedData.rescuePlan = [];
+        parsedData.howToKnowItsWorking = [];
+        if (isSelfie) {
+          parsedData.foodIdentified = 'No Food Detected (Selfie)';
+          parsedData.nonFoodReason = 'This photo appears to be a selfie or picture of a person, not food or cooking.';
+          parsedData.diagnosis = 'Nice selfie! But our kitchen helper only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!';
+        } else {
+          parsedData.foodIdentified = 'No Food Detected';
+          parsedData.nonFoodReason = parsedData.nonFoodReason || 'This photo appears to be a non-food item, not cooking or food.';
+          parsedData.diagnosis = parsedData.diagnosis || "We couldn't spot any food in this photo. Please aim your camera at your pot, pan, or plate!";
+        }
       }
     }
 
