@@ -1,0 +1,6 @@
+{
+  "name": "Save My Dinner",
+  "description": "Snap it. Fix it. Save dinner. Instant AI cooking troubleshooter that diagnoses kitchen mishaps and gives real-time, step-by-step rescue plans.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
