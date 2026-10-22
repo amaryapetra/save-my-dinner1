@@ -115,28 +115,22 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
 
     return (
       <div className="w-full max-w-xl mx-auto space-y-5 animate-fade-in pb-16">
-        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-amber-200 text-center space-y-4 shadow-sm">
-          {/* Fun Playful Illustrated Camera Reticle with question mark */}
-          <div className="w-20 h-20 mx-auto relative flex items-center justify-center">
-            <div className="w-20 h-20 rounded-full bg-amber-50 border-2 border-amber-300 flex items-center justify-center">
-              <span className="text-3xl">{isSelfie ? '🤳' : '🧐'}</span>
-            </div>
-            <span className="absolute -top-1 -right-1 bg-amber-500 text-white rounded-full p-1.5 shadow-xs">
-              <Camera className="w-4 h-4" />
-            </span>
+        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200 text-center space-y-4 shadow-xs">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700">
+            <Camera className="w-6 h-6" />
           </div>
 
-          <div className="space-y-2">
-            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+          <div className="space-y-1.5">
+            <span className="text-xs font-semibold text-amber-800 uppercase tracking-wider">
               {isSelfie ? 'Selfie Detected' : 'No Food Detected'}
             </span>
-            <h2 className="text-2xl font-serif font-bold text-stone-900">
-              {isSelfie ? 'Nice selfie, but we need to see your food!' : "Oops, that doesn't look like food!"}
+            <h2 className="text-xl sm:text-2xl font-serif font-bold text-stone-900">
+              {isSelfie ? 'Nice selfie, but we need to see your food' : "Oops, that doesn't look like food"}
             </h2>
             <p className="text-stone-600 text-sm max-w-md mx-auto leading-relaxed">
               {diagnosis.diagnosis || (isSelfie
-                ? "Our kitchen helper can only diagnose what's cooking on the stove or counter! Please aim your back camera down at your pot, pan, or plate."
-                : "We couldn't spot any food, pan, or cooking in this picture. Please aim your camera at your pot, pan, or plate!")}
+                ? "Our kitchen helper can only diagnose what's cooking on the stove or counter. Please aim your back camera down at your pot, pan, or plate!"
+                : "We couldn't spot any food, pan, or cooking in this picture. Please aim your camera at your pot, pan, or plate so we can help fix it!")}
             </p>
           </div>
 
@@ -432,40 +426,16 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
 
         {/* If user clicked "Yes, saved it!" */}
         {fixStatus === 'saved' && (
-          <div className="p-6 rounded-3xl bg-gradient-to-b from-emerald-50 to-teal-50 border border-emerald-200 text-center space-y-4 animate-fade-in shadow-xs">
-            {/* Fun Celebration Vector Illustration */}
-            <div className="w-24 h-24 mx-auto drop-shadow-sm">
-              <svg viewBox="0 0 120 120" className="w-full h-full">
-                {/* Confetti */}
-                <circle cx="20" cy="30" r="4" fill="#F59E0B" />
-                <rect x="90" y="25" width="7" height="7" rx="2" fill="#EC4899" transform="rotate(20 90 25)" />
-                <rect x="25" y="85" width="8" height="5" rx="1.5" fill="#3B82F6" transform="rotate(-15 25 85)" />
-                <circle cx="100" cy="80" r="4" fill="#10B981" />
-                <path d="M50 15 L53 23 L62 25 L55 31 L57 40 L50 35 L43 40 L45 31 L38 25 L47 23 Z" fill="#FBBF24" />
-                
-                {/* Cheerful Golden Pan */}
-                <rect x="75" y="65" width="35" height="10" rx="5" fill="#374151" />
-                <circle cx="55" cy="70" r="32" fill="#1F2937" />
-                <circle cx="55" cy="70" r="26" fill="#F59E0B" />
-                
-                {/* Happy Face */}
-                <circle cx="48" cy="67" r="3" fill="#1F2937" />
-                <circle cx="62" cy="67" r="3" fill="#1F2937" />
-                <path d="M50 73 Q55 80 60 73" stroke="#1F2937" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-                <circle cx="44" cy="72" r="2.5" fill="#EF4444" opacity="0.6" />
-                <circle cx="66" cy="72" r="2.5" fill="#EF4444" opacity="0.6" />
-                
-                {/* Sparkles */}
-                <path d="M25 45 Q30 45 30 40 Q30 45 35 45 Q30 45 30 50 Q30 45 25 45 Z" fill="#F59E0B" />
-                <path d="M80 40 Q85 40 85 35 Q85 40 90 40 Q85 40 85 45 Q85 40 80 40 Z" fill="#F59E0B" />
-              </svg>
+          <div className="p-6 rounded-3xl bg-emerald-50/80 border border-emerald-200 text-center space-y-4 animate-fade-in shadow-xs">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center shadow-xs">
+              <CheckCircle2 className="w-7 h-7 text-emerald-600" />
             </div>
 
             <div className="space-y-1">
-              <h3 className="text-2xl font-serif font-bold text-emerald-950">
-                Dinner is officially saved! 🎉
+              <h3 className="text-xl font-serif font-bold text-emerald-950">
+                Dinner is officially saved!
               </h3>
-              <p className="text-emerald-800 text-sm max-w-sm mx-auto">
+              <p className="text-emerald-800 text-xs sm:text-sm max-w-sm mx-auto leading-relaxed">
                 Turn down the heat, grab your plate, and enjoy your meal!
               </p>
             </div>

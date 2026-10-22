@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Mic,
   Award,
+  Check,
 } from 'lucide-react';
 import { RescueResponse, ConversationMessage, SampleMishap } from './types';
 import { compressImage, CompressionResult } from './utils/imageCompressor';
@@ -21,7 +22,6 @@ import { useVoiceDictation } from './utils/useVoiceDictation';
 import { CameraCaptureModal } from './components/CameraCaptureModal';
 import { RescueResultsView } from './components/RescueResultsView';
 import { ProjectSubmissionModal } from './components/ProjectSubmissionModal';
-import { FunMascot } from './components/FunMascot';
 import { SAMPLE_MISHAPS } from './data/sampleMishaps';
 
 const SHARED_APP_URL = 'https://ais-pre-gncui5dtvv33az5clweulj-279845690615.us-west1.run.app';
@@ -36,6 +36,7 @@ export default function App() {
   const [dishName, setDishName] = useState('');
   const [problemDescription, setProblemDescription] = useState('');
   const [selectedIssueCategory, setSelectedIssueCategory] = useState<string | null>(null);
+  const [isSampleScenario, setIsSampleScenario] = useState(false);
 
   // Flow & AI states
   const [isLoading, setIsLoading] = useState(false);
@@ -62,7 +63,7 @@ export default function App() {
     setIsCameraModalOpen(true);
   };
 
-  // Hands-free microphone voice dictation (Device Feature 2)
+  // Hands-free microphone voice dictation
   const { isListening, isSupported: isVoiceSupported, toggleListening } = useVoiceDictation({
     onTranscript: (text) => {
       setProblemDescription(text);
@@ -72,21 +73,20 @@ export default function App() {
     },
   });
 
-  // Fun visual emoji chips with friendly pastel palettes
-  const issueChips = [
-    { label: 'Too watery', icon: '💧', activeColor: 'bg-sky-500 text-white border-sky-600', idleColor: 'bg-sky-50 text-sky-800 border-sky-200 hover:bg-sky-100', query: 'There is way too much water in the pan and it won\'t thicken up' },
-    { label: 'Too salty', icon: '🧂', activeColor: 'bg-amber-500 text-white border-amber-600', idleColor: 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100', query: 'I poured in too much salt and it burns my tongue' },
-    { label: 'Too dry', icon: '🏜️', activeColor: 'bg-orange-500 text-white border-orange-600', idleColor: 'bg-orange-50 text-orange-800 border-orange-200 hover:bg-orange-100', query: 'The food is drying out and looks tough or stuck' },
-    { label: 'Not browning', icon: '🌫️', activeColor: 'bg-teal-600 text-white border-teal-700', idleColor: 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100', query: 'The food is boiling and steaming instead of getting crispy or brown' },
-    { label: 'Burning on bottom', icon: '🔥', activeColor: 'bg-red-500 text-white border-red-600', idleColor: 'bg-red-50 text-red-800 border-red-200 hover:bg-red-100', query: 'The food is catching and turning black on the bottom of the pan' },
-    { label: 'Raw inside', icon: '🍗', activeColor: 'bg-rose-500 text-white border-rose-600', idleColor: 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100', query: 'The outside looks browned, but the inside is still pink or raw' },
-    { label: 'Something else', icon: '✨', activeColor: 'bg-purple-600 text-white border-purple-700', idleColor: 'bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100', query: '' },
+  // Clean, focused issue chips with warm culinary accents
+  const issueOptions = [
+    { label: 'Separated sauce', query: 'The sauce broke into oil with grainy curdled clumps' },
+    { label: 'Garlic burning', query: 'Garlic is catching and turning dark black on the bottom' },
+    { label: 'Too salty', query: 'I added too much salt and the sauce/broth is overwhelmingly salty' },
+    { label: 'Watery / boiling', query: 'Food is pooling in water and steaming instead of getting crispy' },
+    { label: 'Raw inside', query: 'Outside looks browned, but inside is still raw and pink' },
   ];
 
   // Handle image compression when a photo is selected
-  const handleProcessImage = async (fileOrDataUrl: File | string, isFront = false) => {
+  const handleProcessImage = async (fileOrDataUrl: File | string, isFront = false, isSample = false) => {
     try {
       setIsFrontCameraCapture(isFront);
+      setIsSampleScenario(isSample);
       setIsLoading(true);
       setLoadingPhase('analyzing');
       const compressed: CompressionResult = await compressImage(fileOrDataUrl, 960, 960, 0.72);
@@ -98,9 +98,9 @@ export default function App() {
         compKB: compressed.compressedSizeKB,
       });
 
-      // Rapid browser-native FaceDetector check if available
+      // Browser-native FaceDetector check if available
       let faceDetected = false;
-      if (typeof window !== 'undefined' && 'FaceDetector' in window) {
+      if (!isSample && typeof window !== 'undefined' && 'FaceDetector' in window) {
         try {
           const img = new Image();
           img.src = compressed.dataUrl;
@@ -130,22 +130,68 @@ export default function App() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      handleProcessImage(file);
+      handleProcessImage(file, false, false);
     }
   };
 
-  // Select a preset mishap
-  const handleSelectSampleMishap = (sample: SampleMishap) => {
+  const [activeSampleLoadingId, setActiveSampleLoadingId] = useState<string | null>(null);
+
+  // Select a preset mishap with real photographic food and auto-validation
+  const handleSelectSampleMishap = async (sample: SampleMishap) => {
+    setActiveSampleLoadingId(sample.id);
+    setIsSampleScenario(true);
     setDishName(sample.foodName);
     setProblemDescription(sample.description);
     setSelectedIssueCategory(sample.category);
-    handleProcessImage(sample.previewImage);
+    setPhotoDataUrl(sample.previewImage);
+    const cleanB64 = sample.previewImage.includes('base64,')
+      ? sample.previewImage.split('base64,')[1]
+      : sample.previewImage;
+    setPhotoBase64(cleanB64);
+    setPhotoMimeType('image/jpeg');
+    setErrorMessage(null);
+
+    // Directly trigger rescue request with this scenario's verified payload
+    await handleRescueSubmit(undefined, {
+      imageBase64: cleanB64,
+      mimeType: 'image/jpeg',
+      problemDescription: sample.description,
+      issueCategory: sample.category,
+      dishName: sample.foodName,
+      isFrontCamera: false,
+      isSelfieDetected: false,
+      isSampleScenario: true,
+    });
+    setActiveSampleLoadingId(null);
   };
 
+  interface RescueOverridePayload {
+    imageBase64: string | null;
+    mimeType: string;
+    problemDescription: string;
+    issueCategory: string | null;
+    dishName: string;
+    isFrontCamera: boolean;
+    isSelfieDetected: boolean;
+    isSampleScenario: boolean;
+  }
+
   // Submit diagnosis request to server-side Gemini
-  const handleRescueSubmit = async (e?: React.FormEvent) => {
+  const handleRescueSubmit = async (e?: React.FormEvent, overridePayload?: RescueOverridePayload) => {
     if (e) e.preventDefault();
-    if (!photoBase64 && !problemDescription.trim()) {
+
+    const targetPayload = overridePayload || {
+      imageBase64: photoBase64,
+      mimeType: photoMimeType,
+      problemDescription: problemDescription.trim(),
+      issueCategory: selectedIssueCategory,
+      dishName: dishName.trim(),
+      isFrontCamera: isFrontCameraCapture,
+      isSelfieDetected: isSelfieDetectedInClient || isFrontCameraCapture,
+      isSampleScenario,
+    };
+
+    if (!targetPayload.imageBase64 && !targetPayload.problemDescription.trim()) {
       setErrorMessage('Please snap a photo or describe what is going wrong with your food.');
       return;
     }
@@ -160,22 +206,18 @@ export default function App() {
     }, 60000); // 60 seconds timeout
 
     try {
-      console.log('[/api/rescue] sending request payload with 60s timeout...');
+      console.log('[/api/rescue] sending request payload with 60s timeout...', {
+        isSample: targetPayload.isSampleScenario,
+        dish: targetPayload.dishName,
+      });
+
       const response = await fetch('/api/rescue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         signal: controller.signal,
-        body: JSON.stringify({
-          imageBase64: photoBase64,
-          mimeType: photoMimeType,
-          problemDescription: problemDescription.trim(),
-          issueCategory: selectedIssueCategory,
-          dishName: dishName.trim(),
-          isFrontCamera: isFrontCameraCapture,
-          isSelfieDetected: isSelfieDetectedInClient || isFrontCameraCapture,
-        }),
+        body: JSON.stringify(targetPayload),
       });
       clearTimeout(timeoutId);
 
@@ -210,9 +252,9 @@ export default function App() {
       const initialHistory: ConversationMessage[] = [
         {
           role: 'user',
-          text: `Dish: ${dishName || diagnosisData.foodIdentified}. Issue: ${problemDescription || selectedIssueCategory || 'See photo'}`,
-          imageBase64: photoBase64 || undefined,
-          mimeType: photoMimeType,
+          text: `Dish: ${targetPayload.dishName || diagnosisData.foodIdentified}. Issue: ${targetPayload.problemDescription || targetPayload.issueCategory || 'See photo'}`,
+          imageBase64: targetPayload.imageBase64 || undefined,
+          mimeType: targetPayload.mimeType,
           timestamp: Date.now(),
         },
         {
@@ -240,6 +282,7 @@ export default function App() {
       );
     } finally {
       setIsLoading(false);
+      setActiveSampleLoadingId(null);
     }
   };
 
@@ -357,52 +400,51 @@ export default function App() {
     setDishName('');
     setProblemDescription('');
     setSelectedIssueCategory(null);
+    setIsSampleScenario(false);
     setConversationHistory([]);
     setErrorMessage(null);
   };
 
   return (
-    <div className="min-h-screen bg-[#FAF7F2] text-stone-900 font-sans antialiased selection:bg-amber-200">
+    <div className="min-h-screen bg-[#FDFBF7] text-stone-900 font-sans antialiased selection:bg-amber-200">
       
-      {/* Top Header */}
-      <header className="sticky top-0 z-40 bg-[#FAF7F2]/95 backdrop-blur-md border-b border-stone-200/80 px-4 py-3">
+      {/* Refined Masthead Navigation */}
+      <header className="sticky top-0 z-40 bg-[#FDFBF7]/90 backdrop-blur-md border-b border-stone-200/70 px-4 py-3.5">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div
             onClick={handleStartOver}
             className="flex items-center space-x-2.5 cursor-pointer group"
           >
-            {/* Friendly Cooking Pan Logo */}
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-md shadow-orange-950/15 group-hover:scale-105 transition">
-              <ChefHat className="w-5 h-5 text-white" />
+            <div className="w-9 h-9 rounded-xl bg-stone-900 text-amber-100 flex items-center justify-center shadow-xs group-hover:bg-[#C2410C] transition-colors">
+              <ChefHat className="w-4 h-4" />
             </div>
             <div>
-              <h1 className="text-lg font-serif font-bold text-stone-900 tracking-tight flex items-center gap-1.5">
-                <span>Save My Dinner</span>
-                <span className="text-xs">🍳</span>
-              </h1>
-              <p className="text-[11px] text-stone-500 font-medium">
-                Snap it. Fix it. Eat well.
-              </p>
+              <div className="flex items-center space-x-2">
+                <span className="text-base font-serif font-bold text-stone-900 tracking-tight">
+                  Save My Dinner
+                </span>
+                <span className="text-[11px] font-medium text-stone-500 hidden sm:inline">
+                  · Stove-side rescue
+                </span>
+              </div>
             </div>
           </div>
 
           <div className="flex items-center space-x-2">
             <button
               onClick={() => setIsSubmissionModalOpen(true)}
-              className="text-xs font-semibold px-3 py-1.5 rounded-full bg-amber-100/80 hover:bg-amber-200 text-amber-900 border border-amber-300 flex items-center space-x-1.5 transition active:scale-95"
-              title="Project Details & Presentation Info"
+              className="text-xs font-medium px-3 py-1.5 rounded-lg text-stone-600 hover:text-stone-900 hover:bg-stone-100 transition active:scale-95"
             >
-              <Award className="w-3.5 h-3.5 text-amber-700" />
-              <span>Project Hub</span>
+              Project Hub
             </button>
 
             {currentDiagnosis && (
               <button
                 onClick={handleStartOver}
-                className="text-xs font-semibold px-3 py-1.5 rounded-full bg-stone-200/80 hover:bg-stone-300 text-stone-700 flex items-center space-x-1 transition"
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-stone-900 text-white hover:bg-stone-800 flex items-center space-x-1.5 transition active:scale-95 shadow-xs"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">New Fix</span>
+                <span>New Fix</span>
               </button>
             )}
           </div>
@@ -410,11 +452,11 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="max-w-2xl mx-auto px-4 py-4 sm:py-6">
+      <main className="max-w-2xl mx-auto px-4 py-6 sm:py-8">
         
         {/* Error notification banner */}
         {errorMessage && (
-          <div className="mb-5 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in shadow-xs">
+          <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in shadow-xs">
             <div className="flex items-start space-x-2.5">
               <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
               <div>
@@ -434,7 +476,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setErrorMessage(null)}
-                className="p-1 text-rose-500 hover:text-rose-800 rounded-lg transition"
+                className="p-1 text-rose-500 hover:text-rose-800 rounded-lg transition cursor-pointer"
                 aria-label="Dismiss error"
               >
                 <X className="w-4 h-4" />
@@ -455,184 +497,178 @@ export default function App() {
             onOpenLiveCamera={handleOpenLiveCamera}
           />
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-8">
             
-            {/* Friendly Mascot Hero */}
-            <FunMascot />
-
-            {/* Simple Step 1: Photo Box */}
-            <div className="bg-white rounded-3xl p-5 border border-stone-200/90 shadow-xs space-y-3.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-stone-900 uppercase tracking-wider flex items-center space-x-1.5">
-                  <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 text-xs flex items-center justify-center font-bold">1</span>
-                  <span>Snap your pan or pot</span>
-                </span>
-                <span className="text-[11px] text-stone-400">Point at stove</span>
-              </div>
-
-              {photoDataUrl ? (
-                /* Selected Photo Polaroid Preview */
-                <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500 bg-stone-900 max-h-72 flex items-center justify-center group shadow-md">
-                  <img
-                    src={photoDataUrl}
-                    alt="Food to fix"
-                    className="w-full h-60 object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end justify-between p-3.5">
-                    <div className="text-white text-xs">
-                      <span className="font-bold flex items-center text-emerald-300">
-                        <Sparkles className="w-3.5 h-3.5 mr-1" /> Photo Loaded!
-                      </span>
-                      <span className="text-[11px] text-stone-300">Ready for instant advice</span>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => setIsCameraModalOpen(true)}
-                        className="px-3 py-1.5 bg-white/25 hover:bg-white/40 text-white rounded-xl text-xs font-semibold backdrop-blur-sm transition"
-                      >
-                        Retake
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPhotoDataUrl(null);
-                          setPhotoBase64(null);
-                          setCompressionInfo(null);
-                        }}
-                        className="p-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition"
-                        title="Remove photo"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                /* Simple, Colorful Photo Buttons */
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Big Green Camera Button */}
-                  <button
-                    type="button"
-                    onClick={() => setIsCameraModalOpen(true)}
-                    className="p-4 sm:p-5 rounded-2xl bg-gradient-to-b from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white flex flex-col items-center justify-center space-y-1.5 shadow-md shadow-emerald-900/10 active:scale-95 transition cursor-pointer"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center">
-                      <Camera className="w-6 h-6 text-white" />
-                    </div>
-                    <span className="font-bold text-sm sm:text-base">Take Photo</span>
-                    <span className="text-[11px] text-emerald-100 text-center">
-                      Use camera
-                    </span>
-                  </button>
-
-                  {/* Big Warm Upload Button */}
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-4 sm:p-5 rounded-2xl bg-[#FCFAF6] hover:bg-stone-100 text-stone-800 border-2 border-dashed border-stone-300 flex flex-col items-center justify-center space-y-1.5 active:scale-95 transition cursor-pointer"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-stone-200/70 flex items-center justify-center">
-                      <Upload className="w-5 h-5 text-stone-600" />
-                    </div>
-                    <span className="font-bold text-sm sm:text-base">From Library</span>
-                    <span className="text-[11px] text-stone-500 text-center">
-                      Pick photo
-                    </span>
-                  </button>
-                </div>
-              )}
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleFileChange}
-              />
+            {/* Clean Hero Header */}
+            <div className="space-y-2">
+              <h1 className="text-2xl sm:text-3xl font-serif font-bold text-stone-900 tracking-tight leading-tight">
+                Cooking mishap? Let’s save your dinner.
+              </h1>
+              <p className="text-sm text-stone-600 leading-relaxed max-w-xl">
+                Snap a quick photo of your pot or pan, or describe what's going wrong. Get plain-English steps right now before food is ruined.
+              </p>
             </div>
 
-            {/* Simple Step 2: Problem Form */}
-            <form onSubmit={handleRescueSubmit} className="bg-white rounded-3xl p-5 border border-stone-200/90 shadow-xs space-y-4">
+            {/* Unified Troubleshooter Card */}
+            <form onSubmit={handleRescueSubmit} className="bg-white rounded-3xl p-5 sm:p-7 border border-stone-200/80 shadow-xs space-y-6">
               
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-stone-900 uppercase tracking-wider flex items-center space-x-1.5">
-                  <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 text-xs flex items-center justify-center font-bold">2</span>
-                  <span>What's going wrong?</span>
-                </span>
-                <span className="text-[11px] text-stone-400">Tap to select</span>
-              </div>
+              {/* Photo Upload / Viewfinder Trigger */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700">
+                  Photo of your dish <span className="font-normal text-stone-400 lowercase">(optional, but helps a lot)</span>
+                </label>
 
-              {/* Colorful Emoji Problem Chips */}
-              <div className="flex flex-wrap gap-1.5">
-                {issueChips.map((chip) => {
-                  const isSelected = selectedIssueCategory === chip.label;
-                  return (
+                {photoDataUrl ? (
+                  /* Photo Loaded Preview Card */
+                  <div className="relative rounded-2xl overflow-hidden border border-stone-200 bg-stone-900 flex items-center justify-center">
+                    <img
+                      src={photoDataUrl}
+                      alt="Food to rescue"
+                      className="w-full h-52 sm:h-60 object-cover"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-stone-950/80 via-transparent to-transparent flex items-end justify-between p-4">
+                      <div className="text-white text-xs space-y-0.5">
+                        <span className="font-semibold text-emerald-400 flex items-center">
+                          <Check className="w-3.5 h-3.5 mr-1" /> Photo attached
+                        </span>
+                        <span className="text-[11px] text-stone-300">Ready for visual diagnosis</span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsCameraModalOpen(true)}
+                          className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-medium backdrop-blur-sm transition cursor-pointer"
+                        >
+                          Change Photo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPhotoDataUrl(null);
+                            setPhotoBase64(null);
+                            setCompressionInfo(null);
+                            setIsSampleScenario(false);
+                          }}
+                          className="p-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition cursor-pointer"
+                          title="Remove photo"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Clean Photo Action Buttons */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
-                      key={chip.label}
                       type="button"
-                      onClick={() => {
-                        if (isSelected) {
-                          setSelectedIssueCategory(null);
-                        } else {
-                          setSelectedIssueCategory(chip.label);
-                          if (chip.query && !problemDescription) {
-                            setProblemDescription(chip.query);
-                          }
-                        }
-                      }}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition active:scale-95 border cursor-pointer flex items-center space-x-1 ${
-                        isSelected ? chip.activeColor : chip.idleColor
-                      }`}
+                      onClick={() => setIsCameraModalOpen(true)}
+                      className="py-4 px-4 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center space-x-2.5 transition active:scale-[0.98] shadow-xs cursor-pointer group"
                     >
-                      <span>{chip.icon}</span>
-                      <span>{chip.label}</span>
+                      <Camera className="w-5 h-5 text-emerald-200 group-hover:scale-110 transition-transform" />
+                      <span className="font-semibold text-sm">Snap Live Photo</span>
                     </button>
-                  );
-                })}
+
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="py-4 px-4 rounded-2xl bg-stone-50 hover:bg-stone-100 text-stone-700 border border-stone-200 flex items-center justify-center space-x-2.5 transition active:scale-[0.98] cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4 text-stone-500" />
+                      <span className="font-semibold text-sm">Upload from Device</span>
+                    </button>
+                  </div>
+                )}
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
               </div>
 
-              {/* Dish Name Optional Input */}
-              <div>
+              {/* Dish Name Field */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700">
+                  What are you making? <span className="font-normal text-stone-400 lowercase">(optional)</span>
+                </label>
                 <input
                   type="text"
                   value={dishName}
                   onChange={(e) => setDishName(e.target.value)}
-                  placeholder="What are you cooking? (e.g. Cream pasta, stir-fry, steak...)"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 border border-stone-200 text-xs sm:text-sm text-stone-900 placeholder-stone-400 focus:bg-white focus:outline-emerald-600 transition"
+                  placeholder="e.g. Cream sauce, seared chicken breast, stir-fry, tomato sauce"
+                  className="w-full px-4 py-3 rounded-xl bg-stone-50 border border-stone-200 text-sm text-stone-900 placeholder-stone-400 focus:bg-white focus:outline-emerald-600 transition"
                 />
               </div>
 
-              {/* Problem Description with Mic */}
+              {/* Problem Description & Voice Dictation */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-stone-500">
-                    Tell us what happened:
-                  </span>
-                  <button
-                    type="button"
-                    onClick={toggleListening}
-                    className={`inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold transition active:scale-95 cursor-pointer ${
-                      isListening
-                        ? 'bg-rose-100 text-rose-800 border border-rose-300 animate-pulse'
-                        : 'bg-stone-100 hover:bg-stone-200 text-stone-700 border border-stone-200'
-                    }`}
-                    title="Speak using microphone"
-                  >
-                    <Mic className={`w-3 h-3 ${isListening ? 'text-rose-600' : 'text-emerald-700'}`} />
-                    <span>{isListening ? 'Listening...' : '🎤 Speak Hands-Free'}</span>
-                  </button>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700">
+                    What's going wrong right now?
+                  </label>
+                  
+                  {isVoiceSupported && (
+                    <button
+                      type="button"
+                      onClick={toggleListening}
+                      className={`text-xs font-medium px-2.5 py-1 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
+                        isListening
+                          ? 'bg-rose-100 text-rose-800 animate-pulse'
+                          : 'bg-stone-100 text-stone-600 hover:text-stone-900 hover:bg-stone-200'
+                      }`}
+                      title="Speak using microphone"
+                    >
+                      <Mic className={`w-3.5 h-3.5 ${isListening ? 'text-rose-600' : 'text-stone-500'}`} />
+                      <span>{isListening ? 'Listening...' : 'Dictate'}</span>
+                    </button>
+                  )}
                 </div>
 
-                <div className="relative">
-                  <textarea
-                    value={problemDescription}
-                    onChange={(e) => setProblemDescription(e.target.value)}
-                    placeholder="e.g. Sauce turned into melted oil with clumps, or bottom is smelling burnt... or tap the mic to speak!"
-                    className={`w-full p-3 rounded-2xl bg-stone-50 border text-xs sm:text-sm text-stone-900 placeholder-stone-400 focus:bg-white focus:outline-emerald-600 transition resize-none min-h-[85px] ${
-                      isListening ? 'border-rose-400 ring-2 ring-rose-200' : 'border-stone-200'
-                    }`}
-                  />
+                <textarea
+                  value={problemDescription}
+                  onChange={(e) => setProblemDescription(e.target.value)}
+                  placeholder="Describe what you see, smell, or taste. (e.g., The sauce broke into an oily puddle with little grainy clumps, or the garlic is catching and turning dark black...)"
+                  className={`w-full p-4 rounded-xl bg-stone-50 border text-sm text-stone-900 placeholder-stone-400 focus:bg-white focus:outline-emerald-600 transition resize-none min-h-[90px] ${
+                    isListening ? 'border-rose-400 ring-2 ring-rose-200' : 'border-stone-200'
+                  }`}
+                />
+              </div>
+
+              {/* Common Emergencies Quick Select */}
+              <div className="space-y-2 pt-1">
+                <span className="block text-xs font-semibold text-stone-500">
+                  Or pick a common mishap:
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {issueOptions.map((opt) => {
+                    const isSelected = selectedIssueCategory === opt.label;
+                    return (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedIssueCategory(null);
+                          } else {
+                            setSelectedIssueCategory(opt.label);
+                            if (opt.query && (!problemDescription || issueOptions.some(o => o.query === problemDescription))) {
+                              setProblemDescription(opt.query);
+                            }
+                          }
+                        }}
+                        className={`text-xs px-3 py-1.5 rounded-lg border transition cursor-pointer ${
+                          isSelected
+                            ? 'bg-stone-900 text-white border-stone-900 font-medium'
+                            : 'bg-stone-50 hover:bg-stone-100 text-stone-700 border-stone-200'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -640,70 +676,95 @@ export default function App() {
               <button
                 type="submit"
                 disabled={isLoading || (!photoBase64 && !problemDescription.trim())}
-                className={`w-full py-4 px-6 rounded-2xl font-bold text-base sm:text-lg text-white flex items-center justify-center space-x-2 shadow-lg transition active:scale-[0.98] ${
+                className={`w-full py-4 px-6 rounded-2xl font-bold text-base text-white flex items-center justify-center space-x-2 shadow-md transition active:scale-[0.99] cursor-pointer ${
                   isLoading || (!photoBase64 && !problemDescription.trim())
                     ? 'bg-stone-300 text-stone-500 cursor-not-allowed shadow-none'
-                    : 'bg-[#D9381E] hover:bg-[#C42C13] shadow-red-950/20 cursor-pointer'
+                    : 'bg-[#C2410C] hover:bg-[#9A3412] shadow-orange-950/15'
                 }`}
               >
                 {isLoading ? (
                   <>
                     <RefreshCw className="w-5 h-5 animate-spin" />
-                    <span>Checking your food...</span>
+                    <span>Analyzing your food...</span>
                   </>
                 ) : (
                   <>
                     <Flame className="w-5 h-5 text-amber-300" />
-                    <span>Fix My Dinner 🚀</span>
-                    <ArrowRight className="w-5 h-5 ml-1" />
+                    <span>Fix My Dinner</span>
+                    <ArrowRight className="w-4 h-4 ml-1" />
                   </>
                 )}
               </button>
 
             </form>
 
-            {/* Fun Sample Scenarios with Colorful Illustrated Cards */}
-            <div className="space-y-3 pt-1">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs font-bold text-stone-600 uppercase tracking-wider flex items-center">
-                  <UtensilsCrossed className="w-3.5 h-3.5 mr-1.5 text-stone-400" />
-                  Or tap an example to test
-                </span>
-                <span className="text-[11px] text-stone-400">Instant test</span>
+            {/* Clean Sample Mishaps Section with Real Food Photography */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-stone-600 flex items-center space-x-1.5">
+                  <UtensilsCrossed className="w-4 h-4 text-stone-400" />
+                  <span>Try an Example Cooking Mishap</span>
+                </h2>
+                <span className="text-xs text-stone-400 font-medium">1-tap demo</span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {SAMPLE_MISHAPS.map((mishap) => (
-                  <button
-                    key={mishap.id}
-                    type="button"
-                    onClick={() => handleSelectSampleMishap(mishap)}
-                    className="p-3 rounded-2xl bg-white border border-stone-200 hover:border-amber-400 hover:shadow-sm text-left transition group flex items-center space-x-3 cursor-pointer"
-                  >
-                    <div className="w-14 h-14 rounded-xl overflow-hidden shrink-0 border border-stone-200 shadow-2xs group-hover:scale-105 transition">
-                      <img src={mishap.previewImage} alt={mishap.title} className="w-full h-full object-cover" />
+                {SAMPLE_MISHAPS.map((mishap) => {
+                  const isCurrentLoading = activeSampleLoadingId === mishap.id;
+                  return (
+                    <div
+                      key={mishap.id}
+                      onClick={() => {
+                        if (!isLoading) {
+                          handleSelectSampleMishap(mishap);
+                        }
+                      }}
+                      className={`p-3.5 rounded-2xl bg-white border transition flex items-center space-x-3.5 group ${
+                        isCurrentLoading
+                          ? 'border-[#C2410C] ring-2 ring-orange-200 bg-orange-50/30'
+                          : isLoading
+                          ? 'opacity-60 cursor-not-allowed border-stone-200'
+                          : 'border-stone-200 hover:border-amber-400 hover:shadow-xs cursor-pointer'
+                      }`}
+                    >
+                      <div className="w-16 h-16 rounded-xl overflow-hidden bg-stone-100 shrink-0 border border-stone-100">
+                        <img
+                          src={mishap.previewImage}
+                          alt={mishap.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-xs sm:text-sm font-bold text-stone-900 truncate group-hover:text-[#C2410C] transition-colors">
+                          {mishap.title}
+                        </h3>
+                        <p className="text-[11px] text-stone-500 line-clamp-1 mt-0.5">
+                          {mishap.foodName}
+                        </p>
+                        <div className="mt-1">
+                          {isCurrentLoading ? (
+                            <span className="text-[11px] text-[#C2410C] font-semibold inline-flex items-center space-x-1">
+                              <RefreshCw className="w-3 h-3 animate-spin mr-1" />
+                              <span>Diagnosing...</span>
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-amber-800 font-semibold inline-flex items-center">
+                              Run test rescue →
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="space-y-0.5 min-w-0">
-                      <span className="text-xs font-bold text-stone-900 block group-hover:text-amber-800 transition truncate">
-                        {mishap.title}
-                      </span>
-                      <span className="text-[11px] text-stone-500 line-clamp-1">
-                        {mishap.foodName}
-                      </span>
-                      <span className="text-[10px] text-amber-700 font-semibold block pt-0.5">
-                        Test this scenario →
-                      </span>
-                    </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {/* Gentle Food Safety note */}
-            <div className="p-3.5 rounded-2xl bg-stone-100/60 border border-stone-200/80 text-stone-500 text-xs flex items-center space-x-2.5">
+            {/* Gentle Food Safety Note */}
+            <div className="p-4 rounded-2xl bg-stone-100/70 border border-stone-200/70 text-stone-500 text-xs flex items-center space-x-3">
               <ShieldCheck className="w-4 h-4 text-stone-400 shrink-0" />
-              <p className="leading-snug">
-                <strong>Safety tip:</strong> Always check meats with a meat thermometer (165°F for chicken, 145°F for pork).
+              <p className="leading-relaxed">
+                <strong>Food safety reminder:</strong> Always use a meat thermometer to confirm internal temperature (165°F for poultry, 145°F for pork).
               </p>
             </div>
 
@@ -723,12 +784,12 @@ export default function App() {
             customCameraCallback(dataUrl);
             setCustomCameraCallback(null);
           } else {
-            handleProcessImage(dataUrl, Boolean(isFront));
+            handleProcessImage(dataUrl, Boolean(isFront), false);
           }
         }}
       />
 
-      {/* 150-Point Canvas Project Submission & 2-Minute Demo Modal */}
+      {/* Project Submission & Presentation Modal */}
       <ProjectSubmissionModal
         isOpen={isSubmissionModalOpen}
         onClose={() => setIsSubmissionModalOpen(false)}
