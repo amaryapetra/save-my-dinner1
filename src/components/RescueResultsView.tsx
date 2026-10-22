@@ -539,6 +539,7 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
                             if (reader.result) setFollowUpImage(reader.result as string);
                           };
                           reader.readAsDataURL(file);
+                          e.target.value = '';
                         }
                       }}
                     />

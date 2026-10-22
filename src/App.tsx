@@ -131,6 +131,7 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file) {
       handleProcessImage(file, false, false);
+      e.target.value = '';
     }
   };
 
@@ -396,6 +397,8 @@ export default function App() {
     setCurrentDiagnosis(null);
     setPhotoDataUrl(null);
     setPhotoBase64(null);
+    setIsFrontCameraCapture(false);
+    setIsSelfieDetectedInClient(false);
     setCompressionInfo(null);
     setDishName('');
     setProblemDescription('');
@@ -541,6 +544,8 @@ export default function App() {
                           onClick={() => {
                             setPhotoDataUrl(null);
                             setPhotoBase64(null);
+                            setIsFrontCameraCapture(false);
+                            setIsSelfieDetectedInClient(false);
                             setCompressionInfo(null);
                             setIsSampleScenario(false);
                           }}

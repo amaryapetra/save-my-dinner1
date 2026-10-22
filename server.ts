@@ -555,7 +555,7 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
     }
 
     // Immediate client-side selfie rejection
-    if (isSelfieCamera) {
+    if (hasImage && isSelfieCamera) {
       console.log(`[/api/rescue] Immediate rejection due to selfie/front camera flag`);
       return res.json({
         success: true,
@@ -643,7 +643,7 @@ RULES:
     console.error('[/api/rescue FATAL ERROR]:', err);
     return res.status(500).json({
       success: false,
-      error: err.message || 'An error occurred while diagnosing your food.',
+      error: 'An error occurred while diagnosing your food.',
     });
   }
 });
