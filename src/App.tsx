@@ -779,6 +779,10 @@ export default function App() {
             customCameraCallback(dataUrl);
             setCustomCameraCallback(null);
           } else {
+            if (currentDiagnosis) {
+              setCurrentDiagnosis(null);
+              setConversationHistory([]);
+            }
             handleProcessImage(dataUrl, Boolean(isFront), false);
           }
         }}

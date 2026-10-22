@@ -325,7 +325,7 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
                       Heat: {step.heatSetting}
                     </span>
                   )}
-                  {step.timingMinutes && (
+                  {step.timingMinutes > 0 && (
                     <RescueTimer initialMinutes={step.timingMinutes} label={step.title} />
                   )}
                 </div>

@@ -10,6 +10,14 @@ export function useVoiceDictation({ onTranscript, onError }: VoiceDictationOptio
   const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef<any>(null);
 
+  const onTranscriptRef = useRef(onTranscript);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onTranscriptRef.current = onTranscript;
+    onErrorRef.current = onError;
+  }, [onTranscript, onError]);
+
   useEffect(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -32,7 +40,7 @@ export function useVoiceDictation({ onTranscript, onError }: VoiceDictationOptio
             currentTranscript += event.results[i][0].transcript;
           }
           if (currentTranscript.trim()) {
-            onTranscript(currentTranscript);
+            onTranscriptRef.current(currentTranscript);
           }
         };
 
@@ -40,9 +48,9 @@ export function useVoiceDictation({ onTranscript, onError }: VoiceDictationOptio
           console.warn('Speech recognition error:', event.error);
           setIsListening(false);
           if (event.error === 'not-allowed') {
-            onError?.('Microphone permission was denied. Please allow microphone access in browser settings.');
+            onErrorRef.current?.('Microphone permission was denied. Please allow microphone access in browser settings.');
           } else if (event.error !== 'no-speech') {
-            onError?.(`Voice error: ${event.error}`);
+            onErrorRef.current?.(`Voice error: ${event.error}`);
           }
         };
 
@@ -66,7 +74,7 @@ export function useVoiceDictation({ onTranscript, onError }: VoiceDictationOptio
         } catch (_) {}
       }
     };
-  }, [onTranscript, onError]);
+  }, []);
 
   const startListening = useCallback(() => {
     if (!recognitionRef.current) {

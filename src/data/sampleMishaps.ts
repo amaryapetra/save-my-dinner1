@@ -4,7 +4,7 @@ export const SAMPLE_MISHAPS: SampleMishap[] = [
   {
     id: 'broken-sauce',
     title: 'Split Cream Sauce',
-    category: 'Too watery',
+    category: 'Separated sauce',
     foodName: 'Garlic butter cream sauce',
     description: 'Turned up the burner and the sauce broke into yellow melted oil with little grainy clumps at the bottom.',
     mockHint: 'Butter melted into grease because the burner was too hot',
