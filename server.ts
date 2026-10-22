@@ -147,23 +147,6 @@ const RESCUE_SCHEMA = {
 
 
 
-// Server-side timeout helper: aborts hanging Gemini calls after ms (default 25s)
-function withTimeout<T>(promise: Promise<T>, ms = 25000, timeoutMsg = 'Gemini call timed out'): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(timeoutMsg));
-    }, ms);
-    promise
-      .then((val) => {
-        clearTimeout(timer);
-        resolve(val);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-  });
-}
 
 // Tracks models that have hit quota limits (429) so they are bypassed during cooldown
 const modelCooldowns = new Map<string, number>();
@@ -173,9 +156,9 @@ function markModelExhausted(name: string, durationMs = 30 * 60 * 1000) {
   modelCooldowns.set(name, Date.now() + durationMs);
 }
 
-function getActiveModels(defaultCandidates: { name: string; lowThinking: boolean }[]): { name: string; lowThinking: boolean }[] {
-  const ready: { name: string; lowThinking: boolean }[] = [];
-  const cooling: { name: string; lowThinking: boolean }[] = [];
+function getActiveModels(defaultCandidates: { name: string; thinkingLevel?: ThinkingLevel }[]): { name: string; thinkingLevel?: ThinkingLevel }[] {
+  const ready: { name: string; thinkingLevel?: ThinkingLevel }[] = [];
+  const cooling: { name: string; thinkingLevel?: ThinkingLevel }[] = [];
 
   for (const candidate of defaultCandidates) {
     const cooldownUntil = modelCooldowns.get(candidate.name);
@@ -190,47 +173,53 @@ function getActiveModels(defaultCandidates: { name: string; lowThinking: boolean
 }
 
 const DEFAULT_MODELS = [
-  { name: 'gemini-3.8-flash', lowThinking: true },
-  { name: 'gemini-flash-lite-latest', lowThinking: false },
-  { name: 'gemini-flash-latest', lowThinking: false },
+  { name: 'gemini-3.8-flash', thinkingLevel: ThinkingLevel.LOW },
+  { name: 'gemini-flash-lite-latest', thinkingLevel: ThinkingLevel.MINIMAL },
+  { name: 'gemini-flash-latest', thinkingLevel: undefined },
 ];
 
-
-
-// Helper to run diagnosis model with 25s timeout
+// Helper to run diagnosis model with per-model 12s timeout and 40s total deadline
 async function runDiagnosis(parts: any[]): Promise<RescueResponse | null> {
   const modelsToTry = getActiveModels(DEFAULT_MODELS);
+  const totalStartTime = Date.now();
+  const totalDeadline = 40000;
 
   for (const modelConfig of modelsToTry) {
+    const timeRemaining = totalDeadline - (Date.now() - totalStartTime);
+    if (timeRemaining <= 0) break;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.min(12000, timeRemaining));
+    
     const startMsec = Date.now();
     try {
-      const response = await withTimeout(
-        ai.models.generateContent({
-          model: modelConfig.name,
-          contents: [{ role: 'user', parts }],
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            responseMimeType: 'application/json',
-            responseSchema: RESCUE_SCHEMA,
-            temperature: 0.2,
-            ...(modelConfig.lowThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
-          },
-        }),
-        25000,
-        `Diagnosis model ${modelConfig.name} timed out after 25s`
-      );
+      const response = await ai.models.generateContent({
+        model: modelConfig.name,
+        contents: [{ role: 'user', parts }],
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: RESCUE_SCHEMA,
+          temperature: 0.2,
+          ...(modelConfig.thinkingLevel ? { thinkingConfig: { thinkingLevel: modelConfig.thinkingLevel } } : {}),
+          abortSignal: controller.signal,
+        },
+      });
 
+      clearTimeout(timeout);
       const elapsed = Date.now() - startMsec;
       console.log(`[Diagnosis Model] succeeded on ${modelConfig.name} in ${elapsed}ms`);
 
       const rawText = response.text || '{}';
-      const parsedData: RescueResponse = JSON.parse(rawText);
-      return parsedData;
+      return JSON.parse(rawText) as RescueResponse;
     } catch (err: any) {
+      clearTimeout(timeout);
       const elapsed = Date.now() - startMsec;
-      if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
+      if (err.name === 'AbortError') {
+        console.warn(`[Diagnosis Model attempt on ${modelConfig.name} timed out or aborted after ${elapsed}ms]`);
+      } else if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
         markModelExhausted(modelConfig.name);
-        console.log(`[Diagnosis Model] Model ${modelConfig.name} reached quota limit; falling back to alternative model.`);
+        console.log(`[Diagnosis Model] Model ${modelConfig.name} reached quota limit; falling back.`);
       } else {
         console.warn(`[Diagnosis Model attempt on ${modelConfig.name} failed after ${elapsed}ms]:`, err?.message || err);
       }
@@ -240,41 +229,49 @@ async function runDiagnosis(parts: any[]): Promise<RescueResponse | null> {
   return null;
 }
 
-// Helper to run follow-up model with 25s timeout
+// Helper to run follow-up model with per-model 12s timeout and 40s total deadline
 async function runFollowUpDiagnosis(contents: any[]): Promise<RescueResponse | null> {
   const modelsToTry = getActiveModels(DEFAULT_MODELS);
+  const totalStartTime = Date.now();
+  const totalDeadline = 40000;
 
   for (const modelConfig of modelsToTry) {
+    const timeRemaining = totalDeadline - (Date.now() - totalStartTime);
+    if (timeRemaining <= 0) break;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.min(12000, timeRemaining));
+    
     const startMsec = Date.now();
     try {
-      const response = await withTimeout(
-        ai.models.generateContent({
-          model: modelConfig.name,
-          contents,
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION + `
+      const response = await ai.models.generateContent({
+        model: modelConfig.name,
+        contents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION + `
 In this follow-up turn, assess progress made since the last steps. Acknowledge what improved and what still needs adjustment.`,
-            responseMimeType: 'application/json',
-            responseSchema: RESCUE_SCHEMA,
-            temperature: 0.2,
-            ...(modelConfig.lowThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
-          },
-        }),
-        25000,
-        `Follow-up model ${modelConfig.name} timed out after 25s`
-      );
+          responseMimeType: 'application/json',
+          responseSchema: RESCUE_SCHEMA,
+          temperature: 0.2,
+          ...(modelConfig.thinkingLevel ? { thinkingConfig: { thinkingLevel: modelConfig.thinkingLevel } } : {}),
+          abortSignal: controller.signal,
+        },
+      });
 
+      clearTimeout(timeout);
       const elapsed = Date.now() - startMsec;
       console.log(`[Follow-Up Model] succeeded on ${modelConfig.name} in ${elapsed}ms`);
 
       const rawText = response.text || '{}';
-      const updatedData: RescueResponse = JSON.parse(rawText);
-      return updatedData;
+      return JSON.parse(rawText) as RescueResponse;
     } catch (err: any) {
+      clearTimeout(timeout);
       const elapsed = Date.now() - startMsec;
-      if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
+      if (err.name === 'AbortError') {
+        console.warn(`[Follow-Up Model attempt on ${modelConfig.name} timed out or aborted after ${elapsed}ms]`);
+      } else if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
         markModelExhausted(modelConfig.name);
-        console.log(`[Follow-Up Model] Model ${modelConfig.name} reached quota limit; falling back to alternative model.`);
+        console.log(`[Follow-Up Model] Model ${modelConfig.name} reached quota limit; falling back.`);
       } else {
         console.warn(`[Follow-Up Model attempt on ${modelConfig.name} failed after ${elapsed}ms]:`, err?.message || err);
       }
