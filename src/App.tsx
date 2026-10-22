@@ -50,6 +50,7 @@ export default function App() {
   const [isSubmissionModalOpen, setIsSubmissionModalOpen] = useState(false);
   const [customCameraCallback, setCustomCameraCallback] = useState<((dataUrl: string) => void) | null>(null);
   const [isFrontCameraCapture, setIsFrontCameraCapture] = useState(false);
+  const [isSelfieDetectedInClient, setIsSelfieDetectedInClient] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleOpenLiveCamera = (callback?: (dataUrl: string) => void) => {
@@ -88,7 +89,7 @@ export default function App() {
       setIsFrontCameraCapture(isFront);
       setIsLoading(true);
       setLoadingPhase('analyzing');
-      const compressed: CompressionResult = await compressImage(fileOrDataUrl, 1400, 1400, 0.82);
+      const compressed: CompressionResult = await compressImage(fileOrDataUrl, 960, 960, 0.72);
       setPhotoDataUrl(compressed.dataUrl);
       setPhotoBase64(compressed.base64);
       setPhotoMimeType(compressed.mimeType);
@@ -96,6 +97,27 @@ export default function App() {
         origKB: compressed.originalSizeKB,
         compKB: compressed.compressedSizeKB,
       });
+
+      // Rapid browser-native FaceDetector check if available
+      let faceDetected = false;
+      if (typeof window !== 'undefined' && 'FaceDetector' in window) {
+        try {
+          const img = new Image();
+          img.src = compressed.dataUrl;
+          await new Promise((resolve) => {
+            if (img.complete) resolve(null);
+            else img.onload = () => resolve(null);
+          });
+          const detector = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 2 });
+          const faces = await detector.detect(img);
+          if (faces && faces.length > 0) {
+            faceDetected = true;
+          }
+        } catch {
+          // ignore detector error
+        }
+      }
+      setIsSelfieDetectedInClient(faceDetected);
       setIsLoading(false);
     } catch (err: any) {
       console.error('Image processing failed:', err);
@@ -133,11 +155,15 @@ export default function App() {
     setLoadingPhase('analyzing');
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 28000);
+
       const response = await fetch('/api/rescue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({
           imageBase64: photoBase64,
           mimeType: photoMimeType,
@@ -145,8 +171,10 @@ export default function App() {
           issueCategory: selectedIssueCategory,
           dishName: dishName.trim(),
           isFrontCamera: isFrontCameraCapture,
+          isSelfieDetected: isSelfieDetectedInClient || isFrontCameraCapture,
         }),
       });
+      clearTimeout(timeoutId);
 
       const result = await response.json();
 
@@ -176,7 +204,12 @@ export default function App() {
       setConversationHistory(initialHistory);
     } catch (err: any) {
       console.error('Rescue error:', err);
-      setErrorMessage(err.message || 'Something went wrong while diagnosing your dinner. Please try again.');
+      const isNetworkTimeout = err.name === 'AbortError' || err.message?.includes('Load failed') || err.message?.includes('Failed to fetch');
+      setErrorMessage(
+        isNetworkTimeout
+          ? 'Network response timed out. Please tap "Fix My Dinner" to retry!'
+          : (err.message || 'Something went wrong while diagnosing your dinner. Please try again.')
+      );
     } finally {
       setIsLoading(false);
     }
@@ -192,7 +225,7 @@ export default function App() {
 
     if (newImage) {
       try {
-        const compressed = await compressImage(newImage, 1200, 1200, 0.8);
+        const compressed = await compressImage(newImage, 960, 960, 0.72);
         compressedNewB64 = compressed.base64;
         newMime = compressed.mimeType;
       } catch (e) {
@@ -201,11 +234,15 @@ export default function App() {
     }
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 28000);
+
       const response = await fetch('/api/follow-up', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({
           conversationHistory,
           newImageBase64: compressedNewB64,
@@ -214,6 +251,7 @@ export default function App() {
           previousDiagnosis: currentDiagnosis,
         }),
       });
+      clearTimeout(timeoutId);
 
       const result = await response.json();
 
