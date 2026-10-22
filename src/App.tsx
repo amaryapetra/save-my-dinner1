@@ -154,10 +154,13 @@ export default function App() {
     setErrorMessage(null);
     setLoadingPhase('analyzing');
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 28000);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 60000); // 60 seconds timeout
 
+    try {
+      console.log('[/api/rescue] sending request payload with 60s timeout...');
       const response = await fetch('/api/rescue', {
         method: 'POST',
         headers: {
@@ -176,13 +179,31 @@ export default function App() {
       });
       clearTimeout(timeoutId);
 
-      const result = await response.json();
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch (parseErr) {
+        console.error('[/api/rescue JSON parse error]:', parseErr);
+      }
 
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Failed to check food. Please check your connection and retry.');
+      console.log('[/api/rescue full server response]:', {
+        status: response.status,
+        ok: response.ok,
+        body: result,
+      });
+
+      if (!response.ok || !result || !result.success) {
+        const errorText =
+          result?.error ||
+          (response.status >= 500
+            ? "Couldn't reach the AI, please try again"
+            : 'Failed to diagnose your food. Please try again.');
+        setErrorMessage(errorText);
+        return;
       }
 
       const diagnosisData: RescueResponse = result.data;
+      console.log('[/api/rescue diagnosisData received]:', diagnosisData);
       setCurrentDiagnosis(diagnosisData);
 
       // Seed multi-turn conversation history
@@ -203,11 +224,18 @@ export default function App() {
       ];
       setConversationHistory(initialHistory);
     } catch (err: any) {
-      console.error('Rescue error:', err);
-      const isNetworkTimeout = err.name === 'AbortError' || err.message?.includes('Load failed') || err.message?.includes('Failed to fetch');
+      clearTimeout(timeoutId);
+      console.error('[/api/rescue request error]:', err);
+      const isTimeout =
+        err.name === 'AbortError' ||
+        err.message?.includes('aborted') ||
+        err.message?.includes('Load failed') ||
+        err.message?.includes('Failed to fetch') ||
+        err.message?.includes('timeout');
+
       setErrorMessage(
-        isNetworkTimeout
-          ? 'Network response timed out. Please tap "Fix My Dinner" to retry!'
+        isTimeout
+          ? 'That took too long, please try again'
           : (err.message || 'Something went wrong while diagnosing your dinner. Please try again.')
       );
     } finally {
@@ -233,10 +261,13 @@ export default function App() {
       }
     }
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 28000);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 60000); // 60 seconds timeout
 
+    try {
+      console.log('[/api/follow-up] sending request with 60s timeout...');
       const response = await fetch('/api/follow-up', {
         method: 'POST',
         headers: {
@@ -253,13 +284,31 @@ export default function App() {
       });
       clearTimeout(timeoutId);
 
-      const result = await response.json();
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch (parseErr) {
+        console.error('[/api/follow-up JSON parse error]:', parseErr);
+      }
 
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Failed to evaluate follow-up. Please retry.');
+      console.log('[/api/follow-up full server response]:', {
+        status: response.status,
+        ok: response.ok,
+        body: result,
+      });
+
+      if (!response.ok || !result || !result.success) {
+        const errorText =
+          result?.error ||
+          (response.status >= 500
+            ? "Couldn't reach the AI, please try again"
+            : 'Failed to evaluate follow-up. Please retry.');
+        setErrorMessage(errorText);
+        return;
       }
 
       const updatedDiagnosis: RescueResponse = result.data;
+      console.log('[/api/follow-up updated diagnosis received]:', updatedDiagnosis);
       setCurrentDiagnosis(updatedDiagnosis);
 
       // Append to conversation history
@@ -280,8 +329,20 @@ export default function App() {
         },
       ]);
     } catch (err: any) {
-      console.error('Follow-up error:', err);
-      setErrorMessage(err.message || 'Could not process follow-up. Please try again.');
+      clearTimeout(timeoutId);
+      console.error('[/api/follow-up error]:', err);
+      const isTimeout =
+        err.name === 'AbortError' ||
+        err.message?.includes('aborted') ||
+        err.message?.includes('Load failed') ||
+        err.message?.includes('Failed to fetch') ||
+        err.message?.includes('timeout');
+
+      setErrorMessage(
+        isTimeout
+          ? 'That took too long, please try again'
+          : (err.message || 'Could not process follow-up. Please try again.')
+      );
     } finally {
       setIsFollowUpLoading(false);
     }
@@ -353,21 +414,32 @@ export default function App() {
         
         {/* Error notification banner */}
         {errorMessage && (
-          <div className="mb-5 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm flex items-start justify-between space-x-3 animate-fade-in shadow-xs">
+          <div className="mb-5 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in shadow-xs">
             <div className="flex items-start space-x-2.5">
               <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-semibold text-rose-800">Quick Notice</p>
+                <p className="font-semibold text-rose-800">Something Went Wrong</p>
                 <p className="mt-0.5 text-rose-700 leading-relaxed">{errorMessage}</p>
               </div>
             </div>
-            <button
-              onClick={() => setErrorMessage(null)}
-              className="p-1 text-rose-500 hover:text-rose-800 rounded-lg transition"
-              aria-label="Dismiss error"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center space-x-2 self-end sm:self-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => handleRescueSubmit()}
+                disabled={isLoading}
+                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl shadow-xs transition active:scale-95 cursor-pointer disabled:opacity-50"
+              >
+                Try Again
+              </button>
+              <button
+                type="button"
+                onClick={() => setErrorMessage(null)}
+                className="p-1 text-rose-500 hover:text-rose-800 rounded-lg transition"
+                aria-label="Dismiss error"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
 

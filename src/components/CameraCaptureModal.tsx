@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Camera, X, RefreshCw, AlertCircle, Image as ImageIcon, SwitchCamera } from 'lucide-react';
+import { Camera, X, RefreshCw, AlertCircle, Image as ImageIcon, SwitchCamera, RotateCcw } from 'lucide-react';
 
 interface CameraCaptureModalProps {
   isOpen: boolean;
@@ -15,52 +15,88 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isOpeningRef = useRef(false);
 
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  // Default to environment (back camera) so users point at their pot, pan, or food
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [isInitializing, setIsInitializing] = useState(true);
+  const [isFlashing, setIsFlashing] = useState(false);
 
-  // Stop current video stream cleanly
+  // Stop current video stream cleanly and release hardware
   const stopStream = useCallback(() => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+      try {
+        const tracks = streamRef.current.getTracks();
+        tracks.forEach((track) => {
+          try {
+            track.stop();
+            track.enabled = false;
+          } catch (e) {
+            console.warn('Track stop error:', e);
+          }
+        });
+      } catch (e) {
+        console.warn('Stream cleanup error:', e);
+      }
       streamRef.current = null;
     }
     if (videoRef.current) {
-      videoRef.current.srcObject = null;
+      try {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+      } catch (e) {
+        console.warn('Video element pause error:', e);
+      }
     }
   }, []);
 
-  // Start video stream targeting the back camera first
+  // Start video stream targeting desired camera
   const startCamera = useCallback(async (desiredMode: 'environment' | 'user' = 'environment') => {
+    if (isOpeningRef.current) return;
+    isOpeningRef.current = true;
+
+    // First stop any lingering stream
     stopStream();
     setIsInitializing(true);
     setErrorMessage(null);
+
+    // Give browser media hardware 120ms to completely release hardware lock
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setHasPermission(false);
       setErrorMessage('Camera access is not supported by this browser. Use the photo button below.');
       setIsInitializing(false);
+      isOpeningRef.current = false;
       return;
     }
 
     try {
-      // Always request the back camera (environment) first for cooking food
       let stream: MediaStream;
+
+      // Primary constraint: ideal facingMode and resolution
       try {
         const constraints: MediaStreamConstraints = {
-          video: desiredMode === 'environment'
-            ? { facingMode: { ideal: 'environment' } }
-            : { facingMode: { ideal: 'user' } },
+          video: {
+            facingMode: desiredMode === 'environment' ? { ideal: 'environment' } : { ideal: 'user' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (modeErr) {
-        // Fallback to any available video stream if ideal facing mode failed
-        console.warn('Specific facingMode constraint failed, using default camera:', modeErr);
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      } catch (idealErr) {
+        console.warn('Ideal constraints failed, trying basic facingMode:', idealErr);
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: desiredMode },
+            audio: false,
+          });
+        } catch (modeErr) {
+          console.warn('FacingMode failed, trying generic video constraint:', modeErr);
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
       }
 
       streamRef.current = stream;
@@ -71,23 +107,38 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         video.setAttribute('playsinline', 'true');
         video.setAttribute('webkit-playsinline', 'true');
         video.muted = true;
+        video.defaultMuted = true;
 
-        const handleCanPlay = async () => {
-          try {
-            await video.play();
-          } catch (playErr) {
-            console.warn('Video play error:', playErr);
-          }
+        // Explicitly trigger play immediately
+        try {
+          await video.play();
+          setIsInitializing(false);
+          setHasPermission(true);
+        } catch (playErr) {
+          console.warn('Direct video.play() error, will wait for event:', playErr);
+        }
+
+        const handleReady = () => {
+          video.play().catch(() => {});
           setIsInitializing(false);
           setHasPermission(true);
         };
 
-        video.onloadedmetadata = handleCanPlay;
-        video.oncanplay = handleCanPlay;
+        video.onloadedmetadata = handleReady;
+        video.oncanplay = handleReady;
         video.onplaying = () => {
           setIsInitializing(false);
           setHasPermission(true);
         };
+
+        // Safety fallback timer to prevent permanent spinner
+        setTimeout(() => {
+          if (stream.active && videoRef.current) {
+            videoRef.current.play().catch(() => {});
+            setIsInitializing(false);
+            setHasPermission(true);
+          }
+        }, 1200);
       }
     } catch (err: any) {
       console.warn('Live camera access error:', err);
@@ -96,15 +147,16 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setErrorMessage('Camera access was blocked. Tap below to snap with your phone camera app.');
       } else {
-        setErrorMessage('Could not open camera. Tap below to use your phone camera app directly.');
+        setErrorMessage('Could not open camera. Tap "Restart Camera" or use your phone camera app.');
       }
+    } finally {
+      isOpeningRef.current = false;
     }
   }, [stopStream]);
 
   // When modal opens, initialize back camera
   useEffect(() => {
     if (isOpen) {
-      // Ensure we start with the back camera (environment)
       setFacingMode('environment');
       startCamera('environment');
     } else {
@@ -122,27 +174,32 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     startCamera(nextMode);
   };
 
-  const [isFlashing, setIsFlashing] = useState(false);
-
   // Capture snapshot from the live video feed
   const takeSnapshot = () => {
-    if (!videoRef.current || videoRef.current.videoWidth === 0) return;
+    if (!videoRef.current) return;
     const video = videoRef.current;
     const isFront = facingMode === 'user';
 
     setIsFlashing(true);
     setTimeout(() => {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
-      stopStream();
-      onCapture(dataUrl, isFront);
-      onClose();
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        
+        stopStream();
+        setIsFlashing(false);
+        onCapture(dataUrl, isFront);
+        onClose();
+      } catch (err) {
+        console.error('Error capturing snapshot:', err);
+        setIsFlashing(false);
+      }
     }, 80);
   };
 
@@ -178,6 +235,15 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
+            {/* Quick Restart Camera button */}
+            <button
+              onClick={() => startCamera(facingMode)}
+              className="p-1.5 text-stone-400 hover:text-white rounded-xl hover:bg-stone-800 transition active:scale-95 cursor-pointer"
+              title="Restart camera stream"
+            >
+              <RotateCcw className="w-4 h-4 text-stone-300" />
+            </button>
+
             {/* Flip camera button */}
             <button
               onClick={toggleCameraFacing}
@@ -229,9 +295,9 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
 
           {/* Initializing Spinner */}
           {isInitializing && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-stone-950 text-stone-300">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-stone-950 text-stone-300 z-20">
               <RefreshCw className="w-8 h-8 animate-spin text-emerald-500 mb-3" />
-              <p className="text-sm font-semibold">Opening back camera...</p>
+              <p className="text-sm font-semibold">Opening {facingMode === 'environment' ? 'back' : 'front'} camera...</p>
               <p className="text-xs text-stone-500 mt-1">Getting ready to inspect your food</p>
             </div>
           )}
@@ -243,19 +309,26 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
 
           {/* Fallback Screen when permission denied or unavailable */}
           {!isInitializing && hasPermission === false && (
-            <div className="p-6 text-center flex flex-col items-center justify-center space-y-4">
+            <div className="p-6 text-center flex flex-col items-center justify-center space-y-4 z-20">
               <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-500">
                 <AlertCircle className="w-8 h-8" />
               </div>
               <div className="space-y-1.5">
-                <h3 className="text-white text-base font-bold">Use Phone Camera Directly</h3>
+                <h3 className="text-white text-base font-bold">Camera Connection Issue</h3>
                 <p className="text-stone-300 text-xs leading-relaxed max-w-xs mx-auto">
-                  {errorMessage || 'Tap below to open your phone camera app.'}
+                  {errorMessage || 'Could not access camera.'}
                 </p>
               </div>
 
-              {/* Native Mobile Camera Fallback */}
+              {/* Action Buttons */}
               <div className="w-full space-y-2 pt-2">
+                <button
+                  onClick={() => startCamera(facingMode)}
+                  className="w-full py-3 px-4 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl font-bold text-sm flex items-center justify-center space-x-2 transition active:scale-[0.98] cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4 text-emerald-400" />
+                  <span>Retry Camera Stream</span>
+                </button>
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm flex items-center justify-center space-x-2 shadow-lg transition active:scale-[0.98] cursor-pointer"
@@ -308,11 +381,11 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
             </button>
           ) : (
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => startCamera(facingMode)}
               className="px-5 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold flex items-center space-x-2 cursor-pointer"
             >
-              <Camera className="w-4 h-4" />
-              <span>Take Photo</span>
+              <RotateCcw className="w-4 h-4" />
+              <span>Restart Camera</span>
             </button>
           )}
 

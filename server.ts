@@ -176,29 +176,83 @@ interface PhotoVerificationResult {
   isApiError: boolean;
 }
 
-// Dedicated pre-flight photo validator: guarantees selfies and non-food are never given cooking advice
+// Server-side timeout helper: aborts hanging Gemini calls after ms (default 25s)
+function withTimeout<T>(promise: Promise<T>, ms = 25000, timeoutMsg = 'Gemini call timed out'): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(timeoutMsg));
+    }, ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+// Tracks models that have hit quota limits (429) so they are bypassed during cooldown
+const modelCooldowns = new Map<string, number>();
+
+// Mark models that previously reported 429 RESOURCE_EXHAUSTED
+modelCooldowns.set('gemini-3.8-flash', Date.now() + 4 * 60 * 60 * 1000);
+modelCooldowns.set('gemini-flash-latest', Date.now() + 4 * 60 * 60 * 1000);
+
+function markModelExhausted(name: string, durationMs = 30 * 60 * 1000) {
+  modelCooldowns.set(name, Date.now() + durationMs);
+}
+
+function getActiveModels(defaultCandidates: { name: string; lowThinking: boolean }[]): { name: string; lowThinking: boolean }[] {
+  const ready: { name: string; lowThinking: boolean }[] = [];
+  const cooling: { name: string; lowThinking: boolean }[] = [];
+
+  for (const candidate of defaultCandidates) {
+    const cooldownUntil = modelCooldowns.get(candidate.name);
+    if (cooldownUntil && Date.now() < cooldownUntil) {
+      cooling.push(candidate);
+    } else {
+      ready.push(candidate);
+    }
+  }
+
+  return ready.length > 0 ? ready : cooling;
+}
+
+const DEFAULT_MODELS = [
+  { name: 'gemini-3.5-flash', lowThinking: true },
+  { name: 'gemini-flash-lite-latest', lowThinking: false },
+  { name: 'gemini-3.8-flash', lowThinking: true },
+  { name: 'gemini-flash-latest', lowThinking: false },
+];
+
+// Dedicated pre-flight photo validator
 async function verifyPhotoIsFood(
   cleanBase64: string,
-  mimeType: string,
-  modelsToTry: string[] = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite']
+  mimeType: string
 ): Promise<PhotoVerificationResult> {
-  for (const modelName of modelsToTry) {
+  const modelsToTry = getActiveModels(DEFAULT_MODELS);
+
+  for (const modelConfig of modelsToTry) {
+    const startMsec = Date.now();
     try {
-      const isGemini3 = modelName.includes('3.8') || modelName.includes('3.1');
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: mimeType || 'image/jpeg',
-                  data: cleanBase64,
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: modelConfig.name,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mimeType || 'image/jpeg',
+                    data: cleanBase64,
+                  },
                 },
-              },
-              {
-                text: `STRICT FOOD VERIFICATION INSPECTION:
+                {
+                  text: `STRICT FOOD VERIFICATION INSPECTION:
 You are an uncompromising visual food validator for a cooking emergency tool.
 Look at this photo carefully:
 1. Is this photo a SELFIE, a PERSON, a HUMAN FACE, a HEADSHOT, an ARM/BODY, or CLOTHING?
@@ -209,19 +263,25 @@ Look at this photo carefully:
    - ONLY if YES: Set isFoodOrCooking: true, isSelfieOrPerson: false.
 
 Be extremely strict: NEVER allow a selfie, face, or non-food item to pass as food!`,
-              },
-            ],
+                },
+              ],
+            },
+          ],
+          config: {
+            systemInstruction:
+              'You are a strict photo verification gatekeeper. Your ONLY job is to determine whether an image actually shows food or cooking, or if it shows a selfie, person, face, or non-food item. Any selfie or human face must ALWAYS be rejected with isFoodOrCooking: false and isSelfieOrPerson: true.',
+            responseMimeType: 'application/json',
+            responseSchema: PHOTO_VERIFICATION_SCHEMA,
+            temperature: 0.1,
+            ...(modelConfig.lowThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
           },
-        ],
-        config: {
-          systemInstruction:
-            'You are a strict photo verification gatekeeper. Your ONLY job is to determine whether an image actually shows food or cooking, or if it shows a selfie, person, face, or non-food item. Any selfie or human face must ALWAYS be rejected with isFoodOrCooking: false and isSelfieOrPerson: true.',
-          responseMimeType: 'application/json',
-          responseSchema: PHOTO_VERIFICATION_SCHEMA,
-          temperature: 0.1,
-          ...(isGemini3 ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
-        },
-      });
+        }),
+        25000,
+        `Photo verification on ${modelConfig.name} timed out after 25s`
+      );
+
+      const elapsed = Date.now() - startMsec;
+      console.log(`[Photo Verification] succeeded on ${modelConfig.name} in ${elapsed}ms`);
 
       const parsed = JSON.parse(response.text || '{}');
       const isFood = Boolean(parsed.isFoodOrCooking);
@@ -237,12 +297,18 @@ Be extremely strict: NEVER allow a selfie, face, or non-food item to pass as foo
         isApiError: false,
       };
     } catch (err: any) {
-      console.warn(`[Photo Verification attempt failed on ${modelName}]:`, err?.message || err);
+      const elapsed = Date.now() - startMsec;
+      if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
+        markModelExhausted(modelConfig.name);
+        console.log(`[Photo Verification] Model ${modelConfig.name} reached quota limit; falling back to alternative model.`);
+      } else {
+        console.warn(`[Photo Verification attempt on ${modelConfig.name} failed after ${elapsed}ms]:`, err?.message || err);
+      }
       continue;
     }
   }
 
-  // If all verification models failed due to API errors:
+  // If all models failed due to API errors or timeouts:
   return {
     isFood: false,
     isSelfie: false,
@@ -250,6 +316,93 @@ Be extremely strict: NEVER allow a selfie, face, or non-food item to pass as foo
     reason: '',
     isApiError: true,
   };
+}
+
+// Helper to run diagnosis model with 25s timeout
+async function runDiagnosis(parts: any[]): Promise<RescueResponse | null> {
+  const modelsToTry = getActiveModels(DEFAULT_MODELS);
+
+  for (const modelConfig of modelsToTry) {
+    const startMsec = Date.now();
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: modelConfig.name,
+          contents: [{ role: 'user', parts }],
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+            responseMimeType: 'application/json',
+            responseSchema: RESCUE_SCHEMA,
+            temperature: 0.2,
+            ...(modelConfig.lowThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
+          },
+        }),
+        25000,
+        `Diagnosis model ${modelConfig.name} timed out after 25s`
+      );
+
+      const elapsed = Date.now() - startMsec;
+      console.log(`[Diagnosis Model] succeeded on ${modelConfig.name} in ${elapsed}ms`);
+
+      const rawText = response.text || '{}';
+      const parsedData: RescueResponse = JSON.parse(rawText);
+      return parsedData;
+    } catch (err: any) {
+      const elapsed = Date.now() - startMsec;
+      if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
+        markModelExhausted(modelConfig.name);
+        console.log(`[Diagnosis Model] Model ${modelConfig.name} reached quota limit; falling back to alternative model.`);
+      } else {
+        console.warn(`[Diagnosis Model attempt on ${modelConfig.name} failed after ${elapsed}ms]:`, err?.message || err);
+      }
+      continue;
+    }
+  }
+  return null;
+}
+
+// Helper to run follow-up model with 25s timeout
+async function runFollowUpDiagnosis(contents: any[]): Promise<RescueResponse | null> {
+  const modelsToTry = getActiveModels(DEFAULT_MODELS);
+
+  for (const modelConfig of modelsToTry) {
+    const startMsec = Date.now();
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: modelConfig.name,
+          contents,
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION + `
+In this follow-up turn, assess progress made since the last steps. Acknowledge what improved and what still needs adjustment.`,
+            responseMimeType: 'application/json',
+            responseSchema: RESCUE_SCHEMA,
+            temperature: 0.2,
+            ...(modelConfig.lowThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
+          },
+        }),
+        25000,
+        `Follow-up model ${modelConfig.name} timed out after 25s`
+      );
+
+      const elapsed = Date.now() - startMsec;
+      console.log(`[Follow-Up Model] succeeded on ${modelConfig.name} in ${elapsed}ms`);
+
+      const rawText = response.text || '{}';
+      const updatedData: RescueResponse = JSON.parse(rawText);
+      return updatedData;
+    } catch (err: any) {
+      const elapsed = Date.now() - startMsec;
+      if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
+        markModelExhausted(modelConfig.name);
+        console.log(`[Follow-Up Model] Model ${modelConfig.name} reached quota limit; falling back to alternative model.`);
+      } else {
+        console.warn(`[Follow-Up Model attempt on ${modelConfig.name} failed after ${elapsed}ms]:`, err?.message || err);
+      }
+      continue;
+    }
+  }
+  return null;
 }
 
 // Fallback rescue generator using 100% everyday, simple words for non-chefs
@@ -494,6 +647,9 @@ function generateFallbackCulinaryRescue(
 
 // 1. Initial Rescue Diagnosis Endpoint
 app.post('/api/rescue', async (req: Request, res: Response) => {
+  const requestStartTime = Date.now();
+  console.log(`[/api/rescue START] timestamp=${new Date().toISOString()} hasImage=${Boolean(req.body.imageBase64)}`);
+
   try {
     const {
       imageBase64,
@@ -506,19 +662,24 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
       isSelfieDetected = false,
     } = req.body;
 
-    console.log('[API Rescue] received imageBase64 bytes:', imageBase64 ? imageBase64.length : 0);
-
-    if (!imageBase64 && !problemDescription) {
-      return res.status(400).json({ error: 'Please provide either a photo of your food or a description of what is going wrong.' });
-    }
-
-    const hasImage = Boolean(imageBase64);
-    const cleanBase64 = imageBase64 ? (imageBase64.includes('base64,') ? imageBase64.split('base64,')[1] : imageBase64) : '';
+    const hasImage = Boolean(imageBase64 && imageBase64.length > 50);
+    const cleanBase64 = hasImage
+      ? (imageBase64.includes('base64,') ? imageBase64.split('base64,')[1] : imageBase64)
+      : '';
     const isSelfieCamera = Boolean(isFrontCamera || cameraFacing === 'user' || isSelfieDetected);
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+
+    console.log(`[/api/rescue] payload: dish="${dishName}", problem="${problemDescription}", category="${issueCategory}", hasImage=${hasImage}, imageBytes=${cleanBase64.length}`);
+
+    if (!hasImage && !problemDescription.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide either a photo of your food or a description of what is going wrong.',
+      });
+    }
 
     // Immediate client-side selfie rejection
     if (isSelfieCamera) {
+      console.log(`[/api/rescue] Immediate rejection due to selfie/front camera flag`);
       return res.json({
         success: true,
         data: {
@@ -540,46 +701,7 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
       });
     }
 
-    // 1. When an image is attached, call verifyPhotoIsFood BEFORE the diagnosis call
-    if (hasImage && cleanBase64) {
-      const verification = await verifyPhotoIsFood(cleanBase64, mimeType, modelsToTry);
-
-      // If every verification attempt throws an API error, return error to UI
-      if (verification.isApiError) {
-        return res.status(503).json({
-          success: false,
-          error: "Couldn't reach the AI, please try again",
-        });
-      }
-
-      // If isFood is false, immediately return without calling diagnosis model
-      if (!verification.isFood) {
-        const isSelfie = verification.isSelfie;
-        return res.json({
-          success: true,
-          data: {
-            isFoodDetected: false,
-            isSelfie,
-            foodIdentified: isSelfie ? 'No Food Detected (Selfie)' : 'No Food Detected',
-            nonFoodReason: verification.reason || (isSelfie ? 'This picture shows a selfie or person, not food or cookware.' : 'This picture does not show food or cooking.'),
-            diagnosis: isSelfie
-              ? 'Nice selfie! But our kitchen helper only rescues food. Please point your camera down at the pot, pan, or plate so we can help fix your meal!'
-              : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!',
-            visibleObservation: '',
-            salvageOption: null,
-            foodSafetyWarning: undefined,
-            clarifyingQuestion: null,
-            urgencyLevel: 'calm',
-            canBeSaved: false,
-            rescuePlan: [],
-            howToKnowItsWorking: [],
-            preventionTip: 'Point your camera directly down at your pan or food.',
-          },
-        });
-      }
-    }
-
-    // 2. Call diagnosis model (only reached if food is verified or text-only)
+    // Prepare diagnosis prompt parts
     const parts: any[] = [];
     if (hasImage && cleanBase64) {
       parts.push({
@@ -603,114 +725,67 @@ RULES:
 
     parts.push({ text: promptText });
 
-    let parsedData: RescueResponse | null = null;
+    let verificationResult: PhotoVerificationResult | null = null;
+    let diagnosisResult: RescueResponse | null = null;
+    let verificationDuration = 0;
+    let diagnosisDuration = 0;
 
-    for (const modelName of modelsToTry) {
-      try {
-        const isGemini3 = modelName.includes('3.8') || modelName.includes('3.1');
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [{ role: 'user', parts }],
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            responseMimeType: 'application/json',
-            responseSchema: RESCUE_SCHEMA,
-            temperature: 0.2,
-            ...(isGemini3 ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
-          },
-        });
+    if (hasImage && cleanBase64) {
+      // 1. Run verifyPhotoIsFood() and runDiagnosis() AT THE SAME TIME using Promise.all
+      console.log('[/api/rescue] Starting verifyPhotoIsFood and runDiagnosis AT THE SAME TIME via Promise.all...');
 
-        const rawText = response.text || '{}';
-        console.log(`[Gemini Response for ${modelName}]:`, rawText);
-        parsedData = JSON.parse(rawText);
-        if (parsedData && (parsedData.isFoodDetected === false || parsedData.rescuePlan?.length)) {
-          break;
+      const verifyPromise = (async () => {
+        const vStart = Date.now();
+        try {
+          const vRes = await verifyPhotoIsFood(cleanBase64, mimeType);
+          verificationDuration = Date.now() - vStart;
+          console.log(`[/api/rescue] verifyPhotoIsFood took ${verificationDuration}ms (isFood: ${vRes.isFood}, isSelfie: ${vRes.isSelfie}, isApiError: ${vRes.isApiError})`);
+          return vRes;
+        } catch (vErr: any) {
+          verificationDuration = Date.now() - vStart;
+          console.error(`[/api/rescue] verifyPhotoIsFood error after ${verificationDuration}ms:`, vErr?.message || vErr);
+          return { isFood: false, isSelfie: false, subject: '', reason: '', isApiError: true };
         }
-      } catch (err: any) {
-        console.warn(`[Gemini Attempt Failed on ${modelName}]:`, err?.message || err);
-        continue;
-      }
-    }
+      })();
 
-    // 4. Check on parsedData.isFoodDetected === false; overwrite diagnosis and clear fields
-    if (parsedData && (parsedData.isFoodDetected === false || String(parsedData.isFoodDetected) === 'false')) {
-      const isSelfie = Boolean(parsedData.isSelfie);
-      parsedData.isFoodDetected = false;
-      parsedData.canBeSaved = false;
-      parsedData.rescuePlan = [];
-      parsedData.howToKnowItsWorking = [];
-      parsedData.diagnosis = isSelfie
-        ? 'Nice selfie! But our kitchen helper only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!'
-        : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!';
-      parsedData.visibleObservation = '';
-      parsedData.salvageOption = null;
-      parsedData.foodSafetyWarning = undefined;
-      parsedData.clarifyingQuestion = null;
-    }
+      const diagnosisPromise = (async () => {
+        const dStart = Date.now();
+        try {
+          const dRes = await runDiagnosis(parts);
+          diagnosisDuration = Date.now() - dStart;
+          console.log(`[/api/rescue] diagnosis call took ${diagnosisDuration}ms (success: ${Boolean(dRes)})`);
+          return dRes;
+        } catch (dErr: any) {
+          diagnosisDuration = Date.now() - dStart;
+          console.error(`[/api/rescue] diagnosis call error after ${diagnosisDuration}ms:`, dErr?.message || dErr);
+          return null;
+        }
+      })();
 
-    // 8. When all Gemini calls fail, return an error the frontend displays clearly
-    if (!parsedData) {
-      return res.status(503).json({
-        success: false,
-        error: "Couldn't reach the AI, please try again",
-      });
-    }
+      [verificationResult, diagnosisResult] = await Promise.all([verifyPromise, diagnosisPromise]);
 
-    return res.json({
-      success: true,
-      data: parsedData,
-    });
-  } catch (err: any) {
-    console.error('Fatal in /api/rescue:', err);
-    return res.status(500).json({
-      success: false,
-      error: err.message || 'An error occurred while diagnosing your food.',
-    });
-  }
-});
+      console.log(`[/api/rescue] Parallel calls completed in ${Date.now() - requestStartTime}ms (verify took ${verificationDuration}ms, diagnosis took ${diagnosisDuration}ms)`);
 
-// 2. Multi-turn Follow-up Endpoint
-app.post('/api/follow-up', async (req: Request, res: Response) => {
-  try {
-    const {
-      conversationHistory,
-      newImageBase64,
-      newMimeType = 'image/jpeg',
-      userMessage,
-      previousDiagnosis,
-    } = req.body;
-
-    console.log('[API Follow-Up] received newImageBase64 bytes:', newImageBase64 ? newImageBase64.length : 0);
-
-    if (!userMessage && !newImageBase64) {
-      return res.status(400).json({ error: 'Please describe the updated situation or snap a photo.' });
-    }
-
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
-
-    // 6. If newImageBase64 is present, run verifyPhotoIsFood on it first and return the same no-food response if it fails
-    if (newImageBase64) {
-      const cleanNewB64 = newImageBase64.includes('base64,')
-        ? newImageBase64.split('base64,')[1]
-        : newImageBase64;
-      const verification = await verifyPhotoIsFood(cleanNewB64, newMimeType, modelsToTry);
-
-      if (verification.isApiError) {
+      // If verification failed with an API error / timeout on both models
+      if (verificationResult.isApiError) {
+        console.error('[/api/rescue] Verification threw API error on all models');
         return res.status(503).json({
           success: false,
           error: "Couldn't reach the AI, please try again",
         });
       }
 
-      if (!verification.isFood) {
-        const isSelfie = verification.isSelfie;
+      // If verification says NOT FOOD, return no-food response immediately and IGNORE the diagnosis
+      if (!verificationResult.isFood) {
+        const isSelfie = verificationResult.isSelfie;
+        console.log(`[/api/rescue] Photo verified as NOT FOOD (isSelfie: ${isSelfie}). Returning no-food response and ignoring diagnosis.`);
         return res.json({
           success: true,
           data: {
             isFoodDetected: false,
             isSelfie,
             foodIdentified: isSelfie ? 'No Food Detected (Selfie)' : 'No Food Detected',
-            nonFoodReason: verification.reason || (isSelfie ? 'This picture shows a selfie or person, not food or cookware.' : 'This picture does not show food or cooking.'),
+            nonFoodReason: verificationResult.reason || (isSelfie ? 'This picture shows a selfie or person, not food or cookware.' : 'This picture does not show food or cooking.'),
             diagnosis: isSelfie
               ? 'Nice selfie! But our kitchen helper only rescues food. Please point your camera down at the pot, pan, or plate so we can help fix your meal!'
               : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!',
@@ -726,8 +801,84 @@ app.post('/api/follow-up', async (req: Request, res: Response) => {
           },
         });
       }
+    } else {
+      // Text-only request (No photo attached)
+      const dStart = Date.now();
+      try {
+        diagnosisResult = await runDiagnosis(parts);
+        diagnosisDuration = Date.now() - dStart;
+        console.log(`[/api/rescue] text-only diagnosis took ${diagnosisDuration}ms (got result: ${Boolean(diagnosisResult)})`);
+      } catch (dErr: any) {
+        diagnosisDuration = Date.now() - dStart;
+        console.error(`[/api/rescue] text-only diagnosis failed after ${diagnosisDuration}ms:`, dErr?.message || dErr);
+      }
     }
 
+    // If diagnosis model failed
+    if (!diagnosisResult) {
+      console.error('[/api/rescue] Diagnosis produced no result after all model attempts');
+      return res.status(503).json({
+        success: false,
+        error: "Couldn't reach the AI, please try again",
+      });
+    }
+
+    // Safety fallback: if diagnosis itself marked isFoodDetected: false
+    if (diagnosisResult.isFoodDetected === false || String(diagnosisResult.isFoodDetected) === 'false') {
+      const isSelfie = Boolean(diagnosisResult.isSelfie);
+      diagnosisResult.isFoodDetected = false;
+      diagnosisResult.canBeSaved = false;
+      diagnosisResult.rescuePlan = [];
+      diagnosisResult.howToKnowItsWorking = [];
+      diagnosisResult.diagnosis = isSelfie
+        ? 'Nice selfie! But our kitchen helper only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!'
+        : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!';
+      diagnosisResult.visibleObservation = '';
+      diagnosisResult.salvageOption = null;
+      diagnosisResult.foodSafetyWarning = undefined;
+      diagnosisResult.clarifyingQuestion = null;
+    }
+
+    console.log(`[/api/rescue SUCCESS] total elapsed ${Date.now() - requestStartTime}ms, returning diagnosis.`);
+    return res.json({
+      success: true,
+      data: diagnosisResult,
+    });
+  } catch (err: any) {
+    console.error('[/api/rescue FATAL ERROR]:', err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'An error occurred while diagnosing your food.',
+    });
+  }
+});
+
+// 2. Multi-turn Follow-up Endpoint
+app.post('/api/follow-up', async (req: Request, res: Response) => {
+  const followUpStartTime = Date.now();
+  console.log(`[/api/follow-up START] timestamp=${new Date().toISOString()}`);
+
+  try {
+    const {
+      conversationHistory,
+      newImageBase64,
+      newMimeType = 'image/jpeg',
+      userMessage,
+      previousDiagnosis,
+    } = req.body;
+
+    const hasNewImage = Boolean(newImageBase64 && newImageBase64.length > 50);
+    const cleanNewB64 = hasNewImage
+      ? (newImageBase64.includes('base64,') ? newImageBase64.split('base64,')[1] : newImageBase64)
+      : '';
+
+    console.log('[API Follow-Up] received newImageBase64 bytes:', cleanNewB64.length);
+
+    if (!userMessage && !hasNewImage) {
+      return res.status(400).json({ error: 'Please describe the updated situation or snap a photo.' });
+    }
+
+    // Build contents for multi-turn
     const contents: any[] = [];
 
     if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
@@ -762,12 +913,11 @@ app.post('/api/follow-up', async (req: Request, res: Response) => {
     }
 
     const newTurnParts: any[] = [];
-    if (newImageBase64) {
-      const cleanB64 = newImageBase64.includes('base64,') ? newImageBase64.split('base64,')[1] : newImageBase64;
+    if (hasNewImage && cleanNewB64) {
       newTurnParts.push({
         inlineData: {
           mimeType: newMimeType || 'image/jpeg',
-          data: cleanB64,
+          data: cleanNewB64,
         },
       });
     }
@@ -783,37 +933,98 @@ Please evaluate updated state and provide revised next steps.`,
       parts: newTurnParts,
     });
 
+    let verificationResult: PhotoVerificationResult | null = null;
     let updatedData: RescueResponse | null = null;
+    let verificationDuration = 0;
+    let diagnosisDuration = 0;
 
-    for (const modelName of modelsToTry) {
-      try {
-        const isGemini3 = modelName.includes('3.8') || modelName.includes('3.1');
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents,
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION + `
-In this follow-up turn, assess progress made since the last steps. Acknowledge what improved and what still needs adjustment.`,
-            responseMimeType: 'application/json',
-            responseSchema: RESCUE_SCHEMA,
-            temperature: 0.2,
-            ...(isGemini3 ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
+    if (hasNewImage && cleanNewB64) {
+      console.log('[/api/follow-up] Starting verifyPhotoIsFood and runFollowUpDiagnosis AT THE SAME TIME via Promise.all...');
+
+      const verifyPromise = (async () => {
+        const vStart = Date.now();
+        try {
+          const vRes = await verifyPhotoIsFood(cleanNewB64, newMimeType);
+          verificationDuration = Date.now() - vStart;
+          console.log(`[/api/follow-up] verifyPhotoIsFood took ${verificationDuration}ms`);
+          return vRes;
+        } catch (vErr: any) {
+          verificationDuration = Date.now() - vStart;
+          console.error(`[/api/follow-up] verifyPhotoIsFood error:`, vErr);
+          return { isFood: false, isSelfie: false, subject: '', reason: '', isApiError: true };
+        }
+      })();
+
+      const diagnosisPromise = (async () => {
+        const dStart = Date.now();
+        try {
+          const dRes = await runFollowUpDiagnosis(contents);
+          diagnosisDuration = Date.now() - dStart;
+          console.log(`[/api/follow-up] diagnosis took ${diagnosisDuration}ms`);
+          return dRes;
+        } catch (dErr: any) {
+          diagnosisDuration = Date.now() - dStart;
+          console.error(`[/api/follow-up] diagnosis error:`, dErr);
+          return null;
+        }
+      })();
+
+      [verificationResult, updatedData] = await Promise.all([verifyPromise, diagnosisPromise]);
+
+      console.log(`[/api/follow-up] Parallel calls complete in ${Date.now() - followUpStartTime}ms (verify: ${verificationDuration}ms, diagnosis: ${diagnosisDuration}ms)`);
+
+      if (verificationResult.isApiError) {
+        return res.status(503).json({
+          success: false,
+          error: "Couldn't reach the AI, please try again",
+        });
+      }
+
+      if (!verificationResult.isFood) {
+        const isSelfie = verificationResult.isSelfie;
+        console.log(`[/api/follow-up] Non-food detected in follow-up. Ignoring diagnosis.`);
+        return res.json({
+          success: true,
+          data: {
+            isFoodDetected: false,
+            isSelfie,
+            foodIdentified: isSelfie ? 'No Food Detected (Selfie)' : 'No Food Detected',
+            nonFoodReason: verificationResult.reason || (isSelfie ? 'This picture shows a selfie or person, not food or cookware.' : 'This picture does not show food or cooking.'),
+            diagnosis: isSelfie
+              ? 'Nice selfie! But our kitchen helper only rescues food. Please point your camera down at the pot, pan, or plate so we can help fix your meal!'
+              : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!',
+            visibleObservation: '',
+            salvageOption: null,
+            foodSafetyWarning: undefined,
+            clarifyingQuestion: null,
+            urgencyLevel: 'calm',
+            canBeSaved: false,
+            rescuePlan: [],
+            howToKnowItsWorking: [],
+            preventionTip: 'Point your camera directly down at your pan or food.',
           },
         });
-
-        const rawText = response.text || '{}';
-        updatedData = JSON.parse(rawText);
-        // 7. Break when isFoodDetected === false or when rescuePlan has items
-        if (updatedData && (updatedData.isFoodDetected === false || updatedData.rescuePlan?.length)) {
-          break;
-        }
-      } catch (err: any) {
-        console.warn(`[Gemini Follow-up Attempt Failed on ${modelName}]:`, err?.message || err);
-        continue;
+      }
+    } else {
+      const dStart = Date.now();
+      try {
+        updatedData = await runFollowUpDiagnosis(contents);
+        diagnosisDuration = Date.now() - dStart;
+        console.log(`[/api/follow-up] text diagnosis took ${diagnosisDuration}ms`);
+      } catch (dErr: any) {
+        diagnosisDuration = Date.now() - dStart;
+        console.error(`[/api/follow-up] text diagnosis error:`, dErr);
       }
     }
 
-    if (updatedData && (updatedData.isFoodDetected === false || String(updatedData.isFoodDetected) === 'false')) {
+    if (!updatedData) {
+      return res.status(503).json({
+        success: false,
+        error: "Couldn't reach the AI, please try again",
+      });
+    }
+
+    if (updatedData.isFoodDetected === false || String(updatedData.isFoodDetected) === 'false') {
       const isSelfie = Boolean(updatedData.isSelfie);
       updatedData.isFoodDetected = false;
       updatedData.canBeSaved = false;
@@ -828,20 +1039,13 @@ In this follow-up turn, assess progress made since the last steps. Acknowledge w
       updatedData.clarifyingQuestion = null;
     }
 
-    // 8. When all Gemini calls fail, return an error the frontend displays clearly
-    if (!updatedData) {
-      return res.status(503).json({
-        success: false,
-        error: "Couldn't reach the AI, please try again",
-      });
-    }
-
+    console.log(`[/api/follow-up SUCCESS] total elapsed: ${Date.now() - followUpStartTime}ms`);
     return res.json({
       success: true,
       data: updatedData,
     });
   } catch (err: any) {
-    console.error('Fatal in /api/follow-up:', err);
+    console.error('[/api/follow-up FATAL ERROR]:', err);
     return res.status(500).json({
       success: false,
       error: err.message || 'Failed to process follow-up.',

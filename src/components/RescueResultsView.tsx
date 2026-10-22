@@ -108,6 +108,7 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
   // Guard: If uploaded image is not food (e.g. selfie, keyboard, pet, random object)
   if (diagnosis.isFoodDetected === false) {
     const isSelfie =
+      Boolean(diagnosis.isSelfie) ||
       diagnosis.foodIdentified?.toLowerCase().includes('selfie') ||
       diagnosis.nonFoodReason?.toLowerCase().includes('selfie') ||
       diagnosis.nonFoodReason?.toLowerCase().includes('person');
