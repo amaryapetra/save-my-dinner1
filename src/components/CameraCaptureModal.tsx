@@ -4,7 +4,7 @@ import { Camera, X, RefreshCw, AlertCircle, Image as ImageIcon, SwitchCamera } f
 interface CameraCaptureModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCapture: (fileOrDataUrl: string) => void;
+  onCapture: (fileOrDataUrl: string, isFrontCamera?: boolean) => void;
 }
 
 export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
@@ -128,6 +128,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   const takeSnapshot = () => {
     if (!videoRef.current || videoRef.current.videoWidth === 0) return;
     const video = videoRef.current;
+    const isFront = facingMode === 'user';
 
     setIsFlashing(true);
     setTimeout(() => {
@@ -140,7 +141,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
       stopStream();
-      onCapture(dataUrl);
+      onCapture(dataUrl, isFront);
       onClose();
     }, 80);
   };
@@ -153,7 +154,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       reader.onload = () => {
         if (reader.result) {
           stopStream();
-          onCapture(reader.result as string);
+          onCapture(reader.result as string, false);
           onClose();
         }
       };
@@ -215,8 +216,10 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
           {/* Simple framing guide for non-chefs */}
           {!isInitializing && hasPermission && (
             <div className="absolute inset-8 pointer-events-none border-2 border-white/40 rounded-2xl flex flex-col justify-between p-3">
-              <div className="text-center text-xs text-white/95 font-semibold bg-black/60 py-1.5 px-3.5 rounded-full mx-auto backdrop-blur-xs shadow-xs">
-                {facingMode === 'environment' ? 'Aim phone at your pot or pan' : 'Front camera view'}
+              <div className={`text-center text-xs font-semibold py-1.5 px-3.5 rounded-full mx-auto backdrop-blur-xs shadow-xs ${
+                facingMode === 'environment' ? 'text-white/95 bg-black/60' : 'text-amber-100 bg-amber-900/80 border border-amber-500/50'
+              }`}>
+                {facingMode === 'environment' ? 'Aim phone at your pot or pan' : '🤳 Selfie Mode — flip camera to scan your cooking pan'}
               </div>
               <div className="text-center text-[11px] text-white/80 bg-black/40 py-1 px-3 rounded-full mx-auto backdrop-blur-xs">
                 Tap the big shutter button below to snap

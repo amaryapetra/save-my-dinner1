@@ -12,7 +12,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+// Port must be 3000 per environment constraints
+const PORT = 3000;
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
@@ -23,7 +24,6 @@ const ai = new GoogleGenAI({
     headers: {
       'User-Agent': 'aistudio-build',
     },
-    timeout: 6000,
   },
 });
 
@@ -144,28 +144,29 @@ function generateFallbackCulinaryRescue(
   problemDescription = '',
   issueCategory = '',
   dishName = '',
-  hasImage = false
+  hasImage = false,
+  isFrontCamera = false
 ): RescueResponse {
   const query = `${problemDescription} ${issueCategory} ${dishName}`.toLowerCase();
 
-  // Selfie / Person detection fallback
+  // 1. Explicit front camera or selfie detection
   const selfieKeywords = ['selfie', 'face', 'person', 'portrait', 'headshot', 'photo of me', 'picture of me', 'human', 'me in photo', 'my face'];
-  if (selfieKeywords.some((kw) => query.includes(kw))) {
+  if (isFrontCamera || selfieKeywords.some((kw) => query.includes(kw))) {
     return {
       isFoodDetected: false,
-      nonFoodReason: 'This picture appears to be a selfie or photo of a person, not food or cooking.',
+      nonFoodReason: 'This picture was taken with the front camera or appears to be a selfie of a person, not food or cooking.',
       foodIdentified: 'No Food Detected (Selfie)',
-      visibleObservation: 'Selfie or human face detected instead of cooking food.',
-      diagnosis: 'Nice selfie! But our kitchen troubleshooter only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!',
+      visibleObservation: 'Selfie or human face captured instead of cooking food on a stove or counter.',
+      diagnosis: 'Nice selfie! But our kitchen troubleshooter only rescues food. Please flip your camera around and aim it down at the pot, pan, or plate so we can help fix your meal!',
       urgencyLevel: 'calm',
       canBeSaved: false,
       rescuePlan: [],
       howToKnowItsWorking: [],
-      preventionTip: 'Point your camera down at your pan or food.',
+      preventionTip: 'Point your camera directly down at your pan or food.',
     };
   }
 
-  // Non-food detection fallback
+  // 2. Non-food detection fallback
   const nonFoodKeywords = ['keyboard', 'laptop', 'mouse', 'desk', 'computer', 'screen', 'dog', 'cat', 'car', 'phone', 'shoe', 'clothing'];
   if (nonFoodKeywords.some((kw) => query.includes(kw))) {
     return {
@@ -179,6 +180,24 @@ function generateFallbackCulinaryRescue(
       rescuePlan: [],
       howToKnowItsWorking: [],
       preventionTip: 'Point your camera directly at your pan or food.',
+    };
+  }
+
+  // 3. If an image was submitted without any cooking keywords or problem description
+  const cookingKeywords = ['burn', 'scorch', 'smoke', 'char', 'salt', 'salty', 'split', 'curdl', 'separat', 'water', 'soggy', 'brown', 'sour', 'bitter', 'sweet', 'oil', 'greas', 'stick', 'dry', 'undercook', 'raw', 'sauce', 'soup', 'meat', 'chicken', 'pasta', 'rice', 'stew', 'curry'];
+  const hasCookingWord = cookingKeywords.some((kw) => query.includes(kw));
+  if (hasImage && !hasCookingWord && !issueCategory) {
+    return {
+      isFoodDetected: false,
+      nonFoodReason: 'We were unable to detect active cooking or ingredients in this photo.',
+      foodIdentified: 'No Food Detected',
+      visibleObservation: 'No pan, pot, or cooking food was clearly detected.',
+      diagnosis: "We couldn't clearly spot food cooking in this photo. Please aim your camera down into your pot, pan, or plate, or describe what you are cooking!",
+      urgencyLevel: 'calm',
+      canBeSaved: false,
+      rescuePlan: [],
+      howToKnowItsWorking: [],
+      preventionTip: 'Ensure good lighting and hold your phone over the cooking pan.',
     };
   }
 
@@ -380,13 +399,22 @@ function generateFallbackCulinaryRescue(
 // 1. Initial Rescue Diagnosis Endpoint
 app.post('/api/rescue', async (req: Request, res: Response) => {
   try {
-    const { imageBase64, mimeType = 'image/jpeg', problemDescription, issueCategory, dishName } = req.body;
+    const {
+      imageBase64,
+      mimeType = 'image/jpeg',
+      problemDescription = '',
+      issueCategory = '',
+      dishName = '',
+      isFrontCamera = false,
+      cameraFacing = 'environment',
+    } = req.body;
 
     if (!imageBase64 && !problemDescription) {
       return res.status(400).json({ error: 'Please provide either a photo of your food or a description of what is going wrong.' });
     }
 
     const hasImage = Boolean(imageBase64);
+    const isSelfieCamera = Boolean(isFrontCamera || cameraFacing === 'user');
     const parts: any[] = [];
 
     if (imageBase64) {
@@ -404,6 +432,7 @@ Dish Name: ${dishName || (hasImage ? 'Identify from photo/context' : 'Identify f
 Problem Description: ${problemDescription || (hasImage ? 'Diagnose from photo' : 'Not specified')}
 Issue Category: ${issueCategory || 'Not specified'}
 Has Photo Attached: ${hasImage ? 'YES (Examine the image)' : 'NO (User only entered text/voice, NO PHOTO ATTACHED)'}
+Camera Mode: ${isSelfieCamera ? 'FRONT / USER FACING (SELFIE CAMERA)' : 'REAR / ENVIRONMENT CAMERA (SURFACE)'}
 
 CRITICAL RULES FOR THIS REQUEST:
 ${
@@ -424,12 +453,13 @@ ${
 
     parts.push({ text: promptText });
 
-    // Attempt calling Gemini API with retry
+    // Attempt calling Gemini API with fast model order & low thinking for instant response
     let parsedData: RescueResponse | null = null;
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
 
     for (const modelName of modelsToTry) {
       try {
+        const isGemini3 = modelName.includes('3.8') || modelName.includes('3.1');
         const response = await ai.models.generateContent({
           model: modelName,
           contents: [{ role: 'user', parts }],
@@ -437,8 +467,8 @@ ${
             systemInstruction: SYSTEM_INSTRUCTION,
             responseMimeType: 'application/json',
             responseSchema: RESCUE_SCHEMA,
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
             temperature: 0.2,
+            ...(isGemini3 ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
           },
         });
 
@@ -449,7 +479,7 @@ ${
           break;
         }
       } catch (err: any) {
-        // Attempt fallback model or instant culinary rescue protocol
+        console.warn(`[Gemini Attempt Failed on ${modelName}]:`, err?.message || err);
         continue;
       }
     }
@@ -497,7 +527,7 @@ ${
 
     // If upstream API is experiencing a temporary 503/504 gateway spike, provide immediate culinary rescue
     if (!parsedData) {
-      parsedData = generateFallbackCulinaryRescue(problemDescription, issueCategory, dishName, hasImage);
+      parsedData = generateFallbackCulinaryRescue(problemDescription, issueCategory, dishName, hasImage, isSelfieCamera);
     }
 
     return res.json({
@@ -585,10 +615,11 @@ Please evaluate updated state and provide revised next steps.`,
 
     let updatedData: RescueResponse | null = null;
 
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
 
     for (const modelName of modelsToTry) {
       try {
+        const isGemini3 = modelName.includes('3.8') || modelName.includes('3.1');
         const response = await ai.models.generateContent({
           model: modelName,
           contents,
@@ -597,8 +628,8 @@ Please evaluate updated state and provide revised next steps.`,
 In this follow-up turn, assess progress made since the last steps. Acknowledge what improved and what still needs adjustment.`,
             responseMimeType: 'application/json',
             responseSchema: RESCUE_SCHEMA,
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
             temperature: 0.2,
+            ...(isGemini3 ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
           },
         });
 
@@ -608,6 +639,7 @@ In this follow-up turn, assess progress made since the last steps. Acknowledge w
           break;
         }
       } catch (err: any) {
+        console.warn(`[Gemini Follow-up Attempt Failed on ${modelName}]:`, err?.message || err);
         continue;
       }
     }

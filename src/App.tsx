@@ -49,6 +49,7 @@ export default function App() {
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
   const [isSubmissionModalOpen, setIsSubmissionModalOpen] = useState(false);
   const [customCameraCallback, setCustomCameraCallback] = useState<((dataUrl: string) => void) | null>(null);
+  const [isFrontCameraCapture, setIsFrontCameraCapture] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleOpenLiveCamera = (callback?: (dataUrl: string) => void) => {
@@ -82,8 +83,9 @@ export default function App() {
   ];
 
   // Handle image compression when a photo is selected
-  const handleProcessImage = async (fileOrDataUrl: File | string) => {
+  const handleProcessImage = async (fileOrDataUrl: File | string, isFront = false) => {
     try {
+      setIsFrontCameraCapture(isFront);
       setIsLoading(true);
       setLoadingPhase('analyzing');
       const compressed: CompressionResult = await compressImage(fileOrDataUrl, 1400, 1400, 0.82);
@@ -142,6 +144,7 @@ export default function App() {
           problemDescription: problemDescription.trim(),
           issueCategory: selectedIssueCategory,
           dishName: dishName.trim(),
+          isFrontCamera: isFrontCameraCapture,
         }),
       });
 
@@ -165,7 +168,7 @@ export default function App() {
         },
         {
           role: 'model',
-          text: `Diagnosis: ${diagnosisData.diagnosis}. Steps: ${diagnosisData.rescuePlan.map((s) => `${s.stepNumber}. ${s.instruction}`).join(' ')}`,
+          text: `Diagnosis: ${diagnosisData.diagnosis}. Steps: ${diagnosisData.rescuePlan?.map((s) => `${s.stepNumber}. ${s.instruction}`).join(' ') || 'No rescue steps.'}`,
           timestamp: Date.now(),
           diagnosisData,
         },
@@ -605,12 +608,12 @@ export default function App() {
           setIsCameraModalOpen(false);
           setCustomCameraCallback(null);
         }}
-        onCapture={(dataUrl) => {
+        onCapture={(dataUrl, isFront) => {
           if (customCameraCallback) {
             customCameraCallback(dataUrl);
             setCustomCameraCallback(null);
           } else {
-            handleProcessImage(dataUrl);
+            handleProcessImage(dataUrl, Boolean(isFront));
           }
         }}
       />
