@@ -643,7 +643,7 @@ RULES:
     console.error('[/api/rescue FATAL ERROR]:', err);
     return res.status(500).json({
       success: false,
-      error: 'An error occurred while diagnosing your food.',
+      error: err.message || 'An error occurred while diagnosing your food.',
     });
   }
 });
