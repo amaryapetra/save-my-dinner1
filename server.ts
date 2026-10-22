@@ -753,7 +753,7 @@ RULES:
         try {
           const vRes = await verifyPhotoIsFood(cleanBase64, mimeType);
           verificationDuration = Date.now() - vStart;
-          console.log(`[/api/rescue] verifyPhotoIsFood took ${verificationDuration}ms (isFood: ${vRes.isFood}, isSelfie: ${vRes.isSelfie}, isApiError: ${vRes.isApiError})`);
+          console.log(`[Photo Verification] took ${verificationDuration}ms (isFood: ${vRes.isFood}, isSelfie: ${vRes.isSelfie}, isApiError: ${vRes.isApiError})`);
           return vRes;
         } catch (vErr: any) {
           verificationDuration = Date.now() - vStart;
@@ -767,7 +767,7 @@ RULES:
         try {
           const dRes = await runDiagnosis(parts);
           diagnosisDuration = Date.now() - dStart;
-          console.log(`[/api/rescue] diagnosis call took ${diagnosisDuration}ms (success: ${Boolean(dRes)})`);
+          console.log(`[Diagnosis Call] took ${diagnosisDuration}ms (success: ${Boolean(dRes)})`);
           return dRes;
         } catch (dErr: any) {
           diagnosisDuration = Date.now() - dStart;
@@ -828,7 +828,7 @@ RULES:
       try {
         diagnosisResult = await runDiagnosis(parts);
         diagnosisDuration = Date.now() - dStart;
-        console.log(`[/api/rescue] text-only diagnosis took ${diagnosisDuration}ms (got result: ${Boolean(diagnosisResult)})`);
+        console.log(`[Text-Only Diagnosis] took ${diagnosisDuration}ms (got result: ${Boolean(diagnosisResult)})`);
       } catch (dErr: any) {
         diagnosisDuration = Date.now() - dStart;
         console.error(`[/api/rescue] text-only diagnosis failed after ${diagnosisDuration}ms:`, dErr?.message || dErr);

@@ -21,7 +21,7 @@ import { compressImage, CompressionResult } from './utils/imageCompressor';
 import { useVoiceDictation } from './utils/useVoiceDictation';
 import { CameraCaptureModal } from './components/CameraCaptureModal';
 import { RescueResultsView } from './components/RescueResultsView';
-import { ProjectSubmissionModal } from './components/ProjectSubmissionModal';
+
 import { SAMPLE_MISHAPS } from './data/sampleMishaps';
 
 const SHARED_APP_URL = 'https://ais-pre-gncui5dtvv33az5clweulj-279845690615.us-west1.run.app';
@@ -48,7 +48,7 @@ export default function App() {
 
   // Modals & inputs
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
-  const [isSubmissionModalOpen, setIsSubmissionModalOpen] = useState(false);
+
   const [customCameraCallback, setCustomCameraCallback] = useState<((dataUrl: string) => void) | null>(null);
   const [isFrontCameraCapture, setIsFrontCameraCapture] = useState(false);
   const [isSelfieDetectedInClient, setIsSelfieDetectedInClient] = useState(false);
@@ -431,12 +431,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setIsSubmissionModalOpen(true)}
-              className="text-xs font-medium px-3 py-1.5 rounded-lg text-stone-600 hover:text-stone-900 hover:bg-stone-100 transition active:scale-95"
-            >
-              Project Hub
-            </button>
+
 
             {currentDiagnosis && (
               <button
@@ -789,12 +784,7 @@ export default function App() {
         }}
       />
 
-      {/* Project Submission & Presentation Modal */}
-      <ProjectSubmissionModal
-        isOpen={isSubmissionModalOpen}
-        onClose={() => setIsSubmissionModalOpen(false)}
-        sharedAppUrl={SHARED_APP_URL}
-      />
+
 
     </div>
   );
