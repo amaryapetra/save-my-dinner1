@@ -38,6 +38,7 @@ interface RescueStep {
 
 interface RescueResponse {
   isFoodDetected?: boolean;
+  isSelfie?: boolean;
   nonFoodReason?: string | null;
   foodIdentified: string;
   visibleObservation: string;
@@ -167,12 +168,20 @@ const PHOTO_VERIFICATION_SCHEMA = {
   required: ['isFoodOrCooking', 'isSelfieOrPerson', 'detectedSubject', 'rejectionReason'],
 };
 
+interface PhotoVerificationResult {
+  isFood: boolean;
+  isSelfie: boolean;
+  subject: string;
+  reason: string;
+  isApiError: boolean;
+}
+
 // Dedicated pre-flight photo validator: guarantees selfies and non-food are never given cooking advice
 async function verifyPhotoIsFood(
   cleanBase64: string,
   mimeType: string,
-  modelsToTry: string[]
-): Promise<{ isFood: boolean; isSelfie: boolean; subject: string; reason: string }> {
+  modelsToTry: string[] = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite']
+): Promise<PhotoVerificationResult> {
   for (const modelName of modelsToTry) {
     try {
       const isGemini3 = modelName.includes('3.8') || modelName.includes('3.1');
@@ -215,28 +224,17 @@ Be extremely strict: NEVER allow a selfie, face, or non-food item to pass as foo
       });
 
       const parsed = JSON.parse(response.text || '{}');
-      let isFood = Boolean(parsed.isFoodOrCooking);
-      let isSelfie = Boolean(parsed.isSelfieOrPerson);
+      const isFood = Boolean(parsed.isFoodOrCooking);
+      const isSelfie = Boolean(parsed.isSelfieOrPerson);
       const subject = parsed.detectedSubject || (isSelfie ? 'Selfie / Person' : 'Unknown item');
       const reason = parsed.rejectionReason || '';
-
-      // Secondary safeguard check on the detected subject text
-      const lowerSubject = subject.toLowerCase();
-      const personIndicators = ['selfie', 'face', 'person', 'human', 'portrait', 'headshot', 'man', 'woman', 'girl', 'boy', 'guy', 'lady', 'hair', 'eyes', 'smile', 'someone', 'people'];
-      const nonFoodIndicators = ['keyboard', 'laptop', 'computer', 'screen', 'desk', 'mouse', 'phone', 'dog', 'cat', 'pet', 'car', 'furniture', 'room'];
-
-      if (personIndicators.some((w) => lowerSubject.includes(w))) {
-        isFood = false;
-        isSelfie = true;
-      } else if (nonFoodIndicators.some((w) => lowerSubject.includes(w))) {
-        isFood = false;
-      }
 
       return {
         isFood,
         isSelfie,
         subject,
         reason: reason || (isSelfie ? 'This photo appears to be a selfie or picture of a person, not food.' : 'This photo does not appear to show food.'),
+        isApiError: false,
       };
     } catch (err: any) {
       console.warn(`[Photo Verification attempt failed on ${modelName}]:`, err?.message || err);
@@ -244,12 +242,13 @@ Be extremely strict: NEVER allow a selfie, face, or non-food item to pass as foo
     }
   }
 
-  // If all verification models failed or timed out, NEVER assume it is food!
+  // If all verification models failed due to API errors:
   return {
     isFood: false,
     isSelfie: false,
-    subject: 'Unverified Photo',
-    reason: 'Photo could not be verified as food.',
+    subject: '',
+    reason: '',
+    isApiError: true,
   };
 }
 
@@ -507,6 +506,8 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
       isSelfieDetected = false,
     } = req.body;
 
+    console.log('[API Rescue] received imageBase64 bytes:', imageBase64 ? imageBase64.length : 0);
+
     if (!imageBase64 && !problemDescription) {
       return res.status(400).json({ error: 'Please provide either a photo of your food or a description of what is going wrong.' });
     }
@@ -514,18 +515,22 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
     const hasImage = Boolean(imageBase64);
     const cleanBase64 = imageBase64 ? (imageBase64.includes('base64,') ? imageBase64.split('base64,')[1] : imageBase64) : '';
     const isSelfieCamera = Boolean(isFrontCamera || cameraFacing === 'user' || isSelfieDetected);
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
 
-    // 1. IMMEDIATE CLIENT-SIDE SELFIE REJECTION
+    // Immediate client-side selfie rejection
     if (isSelfieCamera) {
       return res.json({
         success: true,
         data: {
           isFoodDetected: false,
+          isSelfie: true,
           foodIdentified: 'No Food Detected (Selfie)',
           nonFoodReason: 'This photo was captured in selfie/front-camera mode and shows a person, not food.',
           diagnosis: 'Nice selfie! But our kitchen helper only rescues food. Please flip your camera around and aim it down at the pot, pan, or plate so we can help fix your meal!',
-          visibleObservation: 'Selfie or human face captured instead of cooking food on a stove or counter.',
+          visibleObservation: '',
+          salvageOption: null,
+          foodSafetyWarning: undefined,
+          clarifyingQuestion: null,
           urgencyLevel: 'calm',
           canBeSaved: false,
           rescuePlan: [],
@@ -535,7 +540,46 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
       });
     }
 
-    // 2. GENERATE CULINARY DIAGNOSIS WITH EMBEDDED FOOD VERIFICATION
+    // 1. When an image is attached, call verifyPhotoIsFood BEFORE the diagnosis call
+    if (hasImage && cleanBase64) {
+      const verification = await verifyPhotoIsFood(cleanBase64, mimeType, modelsToTry);
+
+      // If every verification attempt throws an API error, return error to UI
+      if (verification.isApiError) {
+        return res.status(503).json({
+          success: false,
+          error: "Couldn't reach the AI, please try again",
+        });
+      }
+
+      // If isFood is false, immediately return without calling diagnosis model
+      if (!verification.isFood) {
+        const isSelfie = verification.isSelfie;
+        return res.json({
+          success: true,
+          data: {
+            isFoodDetected: false,
+            isSelfie,
+            foodIdentified: isSelfie ? 'No Food Detected (Selfie)' : 'No Food Detected',
+            nonFoodReason: verification.reason || (isSelfie ? 'This picture shows a selfie or person, not food or cookware.' : 'This picture does not show food or cooking.'),
+            diagnosis: isSelfie
+              ? 'Nice selfie! But our kitchen helper only rescues food. Please point your camera down at the pot, pan, or plate so we can help fix your meal!'
+              : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!',
+            visibleObservation: '',
+            salvageOption: null,
+            foodSafetyWarning: undefined,
+            clarifyingQuestion: null,
+            urgencyLevel: 'calm',
+            canBeSaved: false,
+            rescuePlan: [],
+            howToKnowItsWorking: [],
+            preventionTip: 'Point your camera directly down at your pan or food.',
+          },
+        });
+      }
+    }
+
+    // 2. Call diagnosis model (only reached if food is verified or text-only)
     const parts: any[] = [];
     if (hasImage && cleanBase64) {
       parts.push({
@@ -552,24 +596,10 @@ Problem Description: ${problemDescription || (hasImage ? 'Diagnose visible cooki
 Issue Category: ${issueCategory || 'Not specified'}
 Has Photo Attached: ${hasImage ? 'YES (Examine the image)' : 'NO (User only entered text/voice, NO PHOTO ATTACHED)'}
 
-MANDATORY FIRST STEP:
-${
-  hasImage
-    ? `1. STRICT PHOTO FOOD VERIFICATION:
-       - Examine the image. Does it show actual edible food, cooking ingredients, or active cookware (pots, pans) containing food?
-       - IF THE PHOTO IS A SELFIE, PERSON, HUMAN FACE, HEADSHOT, BODY, PET, KEYBOARD, SCREEN, FURNITURE, OR ANY NON-FOOD ITEM:
-         * You MUST set isFoodDetected: false!
-         * Set isSelfie: true (if person/selfie/face) or false (if other non-food)
-         * Set foodIdentified: isSelfie ? "No Food Detected (Selfie)" : "No Food Detected"
-         * Set canBeSaved: false
-         * Set rescuePlan: []
-         * Set howToKnowItsWorking: []
-         * Set diagnosis: isSelfie ? "Nice selfie! But our kitchen helper only rescues food. Please point your camera down at the pot, pan, or plate so we can help fix your meal!" : "Oops! We could not spot any food in this photo. Please point your camera at your pot, pan, or plate!"
-         * NEVER give cooking steps or pretend a face/object is food!
-       - ONLY if actual edible food, ingredients, or active cookware with food is clearly visible, set isFoodDetected: true, isSelfie: false, and provide rescue steps.`
-    : '1. No photo attached. Reported by cook: Provide practical stove-side rescue steps.'
-}
-2. Use simple everyday language. Output JSON matching the schema.`;
+RULES:
+1. Provide practical, friendly, step-by-step stove-side rescue steps.
+2. Use simple everyday language (no culinary jargon or food science).
+3. Output valid JSON matching schema.`;
 
     parts.push({ text: promptText });
 
@@ -602,67 +632,28 @@ ${
       }
     }
 
-    // Server-side safety interceptor for selfies or non-food objects
-    if (parsedData) {
-      const textCorpus = `${parsedData.foodIdentified || ''} ${parsedData.visibleObservation || ''} ${parsedData.diagnosis || ''} ${parsedData.nonFoodReason || ''}`.toLowerCase();
-      const personWords = [
-        'selfie',
-        'human face',
-        'face of a person',
-        'person looking',
-        'portrait of',
-        'headshot',
-        'person smiling',
-        'someone smiling',
-        'a selfie',
-        'no food detected',
-        'human',
-        'person',
-        'face',
-        'woman',
-        'man',
-        'girl',
-        'boy',
-        'guy',
-        'lady',
-        'someone',
-        'people',
-        'keyboard',
-        'computer keyboard',
-        'laptop',
-        'desk',
-        'mouse',
-        'screen',
-        'cat',
-        'dog',
-        'pet',
-        'furniture',
-        'clothing',
-        'shirt',
-      ];
-
-      const isNonFoodMention = personWords.some((w) => textCorpus.includes(w));
-      if (isNonFoodMention || parsedData.isFoodDetected === false || String(parsedData.isFoodDetected) === 'false') {
-        const isSelfie = textCorpus.includes('selfie') || textCorpus.includes('face') || textCorpus.includes('person') || textCorpus.includes('portrait') || textCorpus.includes('headshot') || textCorpus.includes('smiling') || textCorpus.includes('human') || textCorpus.includes('woman') || textCorpus.includes('man');
-        parsedData.isFoodDetected = false;
-        parsedData.canBeSaved = false;
-        parsedData.rescuePlan = [];
-        parsedData.howToKnowItsWorking = [];
-        if (isSelfie) {
-          parsedData.foodIdentified = 'No Food Detected (Selfie)';
-          parsedData.nonFoodReason = 'This photo appears to be a selfie or picture of a person, not food or cooking.';
-          parsedData.diagnosis = 'Nice selfie! But our kitchen helper only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!';
-        } else {
-          parsedData.foodIdentified = 'No Food Detected';
-          parsedData.nonFoodReason = parsedData.nonFoodReason || 'This photo appears to be a non-food item, not cooking or food.';
-          parsedData.diagnosis = parsedData.diagnosis || "We couldn't spot any food in this photo. Please aim your camera at your pot, pan, or plate!";
-        }
-      }
+    // 4. Check on parsedData.isFoodDetected === false; overwrite diagnosis and clear fields
+    if (parsedData && (parsedData.isFoodDetected === false || String(parsedData.isFoodDetected) === 'false')) {
+      const isSelfie = Boolean(parsedData.isSelfie);
+      parsedData.isFoodDetected = false;
+      parsedData.canBeSaved = false;
+      parsedData.rescuePlan = [];
+      parsedData.howToKnowItsWorking = [];
+      parsedData.diagnosis = isSelfie
+        ? 'Nice selfie! But our kitchen helper only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!'
+        : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!';
+      parsedData.visibleObservation = '';
+      parsedData.salvageOption = null;
+      parsedData.foodSafetyWarning = undefined;
+      parsedData.clarifyingQuestion = null;
     }
 
-    // If upstream API is experiencing a temporary 503/504 gateway spike, provide immediate culinary rescue
+    // 8. When all Gemini calls fail, return an error the frontend displays clearly
     if (!parsedData) {
-      parsedData = generateFallbackCulinaryRescue(problemDescription, issueCategory, dishName, hasImage, isSelfieCamera);
+      return res.status(503).json({
+        success: false,
+        error: "Couldn't reach the AI, please try again",
+      });
     }
 
     return res.json({
@@ -689,8 +680,52 @@ app.post('/api/follow-up', async (req: Request, res: Response) => {
       previousDiagnosis,
     } = req.body;
 
+    console.log('[API Follow-Up] received newImageBase64 bytes:', newImageBase64 ? newImageBase64.length : 0);
+
     if (!userMessage && !newImageBase64) {
       return res.status(400).json({ error: 'Please describe the updated situation or snap a photo.' });
+    }
+
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+
+    // 6. If newImageBase64 is present, run verifyPhotoIsFood on it first and return the same no-food response if it fails
+    if (newImageBase64) {
+      const cleanNewB64 = newImageBase64.includes('base64,')
+        ? newImageBase64.split('base64,')[1]
+        : newImageBase64;
+      const verification = await verifyPhotoIsFood(cleanNewB64, newMimeType, modelsToTry);
+
+      if (verification.isApiError) {
+        return res.status(503).json({
+          success: false,
+          error: "Couldn't reach the AI, please try again",
+        });
+      }
+
+      if (!verification.isFood) {
+        const isSelfie = verification.isSelfie;
+        return res.json({
+          success: true,
+          data: {
+            isFoodDetected: false,
+            isSelfie,
+            foodIdentified: isSelfie ? 'No Food Detected (Selfie)' : 'No Food Detected',
+            nonFoodReason: verification.reason || (isSelfie ? 'This picture shows a selfie or person, not food or cookware.' : 'This picture does not show food or cooking.'),
+            diagnosis: isSelfie
+              ? 'Nice selfie! But our kitchen helper only rescues food. Please point your camera down at the pot, pan, or plate so we can help fix your meal!'
+              : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!',
+            visibleObservation: '',
+            salvageOption: null,
+            foodSafetyWarning: undefined,
+            clarifyingQuestion: null,
+            urgencyLevel: 'calm',
+            canBeSaved: false,
+            rescuePlan: [],
+            howToKnowItsWorking: [],
+            preventionTip: 'Point your camera directly down at your pan or food.',
+          },
+        });
+      }
     }
 
     const contents: any[] = [];
@@ -699,7 +734,7 @@ app.post('/api/follow-up', async (req: Request, res: Response) => {
       for (const msg of conversationHistory) {
         const parts: any[] = [];
         if (msg.imageBase64) {
-          const cleanB64 = msg.imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+          const cleanB64 = msg.imageBase64.includes('base64,') ? msg.imageBase64.split('base64,')[1] : msg.imageBase64;
           parts.push({
             inlineData: {
               mimeType: msg.mimeType || 'image/jpeg',
@@ -722,13 +757,13 @@ app.post('/api/follow-up', async (req: Request, res: Response) => {
       });
       contents.push({
         role: 'model',
-        parts: [{ text: `Previous steps: ${previousDiagnosis.rescuePlan.map((s: any) => `${s.stepNumber}. ${s.instruction}`).join('; ')}` }],
+        parts: [{ text: `Previous steps: ${previousDiagnosis.rescuePlan?.map((s: any) => `${s.stepNumber}. ${s.instruction}`).join('; ') || 'None'}` }],
       });
     }
 
     const newTurnParts: any[] = [];
     if (newImageBase64) {
-      const cleanB64 = newImageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+      const cleanB64 = newImageBase64.includes('base64,') ? newImageBase64.split('base64,')[1] : newImageBase64;
       newTurnParts.push({
         inlineData: {
           mimeType: newMimeType || 'image/jpeg',
@@ -750,8 +785,6 @@ Please evaluate updated state and provide revised next steps.`,
 
     let updatedData: RescueResponse | null = null;
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
-
     for (const modelName of modelsToTry) {
       try {
         const isGemini3 = modelName.includes('3.8') || modelName.includes('3.1');
@@ -770,7 +803,8 @@ In this follow-up turn, assess progress made since the last steps. Acknowledge w
 
         const rawText = response.text || '{}';
         updatedData = JSON.parse(rawText);
-        if (updatedData && updatedData.rescuePlan?.length) {
+        // 7. Break when isFoodDetected === false or when rescuePlan has items
+        if (updatedData && (updatedData.isFoodDetected === false || updatedData.rescuePlan?.length)) {
           break;
         }
       } catch (err: any) {
@@ -779,35 +813,27 @@ In this follow-up turn, assess progress made since the last steps. Acknowledge w
       }
     }
 
+    if (updatedData && (updatedData.isFoodDetected === false || String(updatedData.isFoodDetected) === 'false')) {
+      const isSelfie = Boolean(updatedData.isSelfie);
+      updatedData.isFoodDetected = false;
+      updatedData.canBeSaved = false;
+      updatedData.rescuePlan = [];
+      updatedData.howToKnowItsWorking = [];
+      updatedData.diagnosis = isSelfie
+        ? 'Nice selfie! But our kitchen helper only rescues food. Please aim your camera down at the pot, pan, or plate so we can help fix your meal!'
+        : 'Oops! We could not spot any food in this photo. Please aim your camera at your pot, pan, or plate so we can help fix your meal!';
+      updatedData.visibleObservation = '';
+      updatedData.salvageOption = null;
+      updatedData.foodSafetyWarning = undefined;
+      updatedData.clarifyingQuestion = null;
+    }
+
+    // 8. When all Gemini calls fail, return an error the frontend displays clearly
     if (!updatedData) {
-      updatedData = {
-        foodIdentified: previousDiagnosis?.foodIdentified || 'Dish In Progress',
-        visibleObservation: 'Evaluating follow-up progress and texture change.',
-        diagnosis: `Adjusting course based on update: "${userMessage || 'Progress check'}".`,
-        urgencyLevel: 'moderate',
-        canBeSaved: true,
-        rescuePlan: [
-          {
-            stepNumber: 1,
-            title: 'Fine-tune Heat & Consistency',
-            instruction: userMessage?.toLowerCase().includes('water') || userMessage?.toLowerCase().includes('thin')
-              ? 'Raise heat slightly to a gentle bubble and reduce uncovered for 2-3 minutes, or whisk in a cornstarch slurry (1/2 tsp cornstarch + 1 tbsp cold water).'
-              : 'Keep heat on very low. Whisk gently and let the flavors meld for another 90 seconds.',
-            heatSetting: 'Low / Simmer',
-            timingMinutes: 2,
-          },
-          {
-            stepNumber: 2,
-            title: 'Final Flavor Balancing',
-            instruction: 'Taste one drop. Add a pinch of black pepper or a fresh herb sprig to brighten the profile before serving.',
-          },
-        ],
-        howToKnowItsWorking: [
-          'Sauce coats the back of a spoon with desired viscosity.',
-          'No burnt or raw flavors remain.',
-        ],
-        preventionTip: 'Stove heat can fluctuate; always adjust in small 1-minute increments during final stages.',
-      };
+      return res.status(503).json({
+        success: false,
+        error: "Couldn't reach the AI, please try again",
+      });
     }
 
     return res.json({

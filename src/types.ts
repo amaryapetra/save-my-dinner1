@@ -9,6 +9,7 @@ export interface RescueStep {
 
 export interface RescueResponse {
   isFoodDetected?: boolean;
+  isSelfie?: boolean;
   nonFoodReason?: string | null;
   foodIdentified: string;
   visibleObservation: string;
