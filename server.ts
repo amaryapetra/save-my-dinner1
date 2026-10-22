@@ -146,13 +146,6 @@ const RESCUE_SCHEMA = {
 
 
 
-interface PhotoVerificationResult {
-  isFood: boolean;
-  isSelfie: boolean;
-  subject: string;
-  reason: string;
-  isApiError: boolean;
-}
 
 // Server-side timeout helper: aborts hanging Gemini calls after ms (default 25s)
 function withTimeout<T>(promise: Promise<T>, ms = 25000, timeoutMsg = 'Gemini call timed out'): Promise<T> {
@@ -176,9 +169,6 @@ function withTimeout<T>(promise: Promise<T>, ms = 25000, timeoutMsg = 'Gemini ca
 const modelCooldowns = new Map<string, number>();
 
 // Mark models that previously reported 429 RESOURCE_EXHAUSTED
-modelCooldowns.set('gemini-3.8-flash', Date.now() + 4 * 60 * 60 * 1000);
-modelCooldowns.set('gemini-flash-latest', Date.now() + 4 * 60 * 60 * 1000);
-
 function markModelExhausted(name: string, durationMs = 30 * 60 * 1000) {
   modelCooldowns.set(name, Date.now() + durationMs);
 }
@@ -200,9 +190,8 @@ function getActiveModels(defaultCandidates: { name: string; lowThinking: boolean
 }
 
 const DEFAULT_MODELS = [
-  { name: 'gemini-3.5-flash', lowThinking: true },
-  { name: 'gemini-flash-lite-latest', lowThinking: false },
   { name: 'gemini-3.8-flash', lowThinking: true },
+  { name: 'gemini-flash-lite-latest', lowThinking: false },
   { name: 'gemini-flash-latest', lowThinking: false },
 ];
 
@@ -608,7 +597,6 @@ Dish Name: ${dishName || (hasImage ? 'Identify from photo/context' : 'Identify f
 Problem Description: ${problemDescription || (hasImage ? 'Diagnose visible cooking issue from photo' : 'Not specified')}
 Issue Category: ${issueCategory || 'Not specified'}
 Has Photo Attached: ${hasImage ? 'YES (Examine the image)' : 'NO (User only entered text/voice, NO PHOTO ATTACHED)'}
-${isSampleScenario ? 'NOTE: This is a verified test scenario showing real food cooking in a kitchen pan/pot. You MUST set isFoodDetected: true, canBeSaved: true, and provide 2 to 4 rescue steps.' : ''}
 
 RULES:
 1. Provide practical, friendly, step-by-step stove-side rescue steps.
@@ -630,7 +618,7 @@ RULES:
       if (isSampleScenario) {
         return res.json({
           success: true,
-          data: generateFallbackCulinaryRescue(problemDescription, issueCategory, dishName, true, false),
+          data: generateFallbackCulinaryRescue(problemDescription, issueCategory, dishName, false, false),
         });
       }
       return res.status(503).json({
@@ -743,9 +731,7 @@ Please evaluate updated state and provide revised next steps.`,
       parts: newTurnParts,
     });
 
-    let verificationResult: PhotoVerificationResult | null = null;
     let updatedData: RescueResponse | null = null;
-    let verificationDuration = 0;
     let diagnosisDuration = 0;
 
     const dStart = Date.now();

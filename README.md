@@ -57,8 +57,8 @@ This application actively senses the physical world through phone hardware:
 
 1. Clone this repository:
    ```bash
-   git clone <your-repo-url>
-   cd save-my-dinner
+   git clone https://github.com/amaryapetra/save-my-dinner1.git
+   cd save-my-dinner1
    ```
 2. Install dependencies:
    ```bash
