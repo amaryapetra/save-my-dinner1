@@ -521,6 +521,17 @@ function generateFallbackCulinaryRescue(
   };
 }
 
+function sanitizeRescueResponse(data: any): RescueResponse {
+  if (!data || typeof data !== 'object') data = {};
+  data.rescuePlan = Array.isArray(data.rescuePlan) ? data.rescuePlan : [];
+  data.howToKnowItsWorking = Array.isArray(data.howToKnowItsWorking) ? data.howToKnowItsWorking : [];
+  data.foodIdentified = typeof data.foodIdentified === 'string' ? data.foodIdentified : '';
+  data.diagnosis = typeof data.diagnosis === 'string' ? data.diagnosis : '';
+  data.visibleObservation = typeof data.visibleObservation === 'string' ? data.visibleObservation : '';
+  data.preventionTip = typeof data.preventionTip === 'string' ? data.preventionTip : '';
+  return data as RescueResponse;
+}
+
 // 1. Initial Rescue Diagnosis Endpoint
 app.post('/api/rescue', async (req: Request, res: Response) => {
   const requestStartTime = Date.now();
@@ -559,7 +570,7 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
       console.log(`[/api/rescue] Immediate rejection due to selfie/front camera flag`);
       return res.json({
         success: true,
-        data: {
+        data: sanitizeRescueResponse({
           isFoodDetected: false,
           isSelfie: true,
           foodIdentified: 'No Food Detected (Selfie)',
@@ -574,7 +585,7 @@ app.post('/api/rescue', async (req: Request, res: Response) => {
           rescuePlan: [],
           howToKnowItsWorking: [],
           preventionTip: 'Point your camera directly down at your pan or food.',
-        },
+        }),
       });
     }
 
@@ -615,7 +626,7 @@ RULES:
       if (isSampleScenario) {
         return res.json({
           success: true,
-          data: generateFallbackCulinaryRescue(problemDescription, issueCategory, dishName, false, false),
+          data: sanitizeRescueResponse(generateFallbackCulinaryRescue(problemDescription, issueCategory, dishName, false, false)),
         });
       }
       return res.status(503).json({
@@ -637,7 +648,7 @@ RULES:
     console.log(`[/api/rescue SUCCESS] total elapsed ${Date.now() - requestStartTime}ms, returning diagnosis.`);
     return res.json({
       success: true,
-      data: diagnosisResult,
+      data: sanitizeRescueResponse(diagnosisResult),
     });
   } catch (err: any) {
     console.error('[/api/rescue FATAL ERROR]:', err);
@@ -761,7 +772,7 @@ Please evaluate updated state and provide revised next steps.`,
     console.log(`[/api/follow-up SUCCESS] total elapsed: ${Date.now() - followUpStartTime}ms`);
     return res.json({
       success: true,
-      data: updatedData,
+      data: sanitizeRescueResponse(updatedData),
     });
   } catch (err: any) {
     console.error('[/api/follow-up FATAL ERROR]:', err);

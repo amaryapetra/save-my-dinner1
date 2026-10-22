@@ -71,8 +71,8 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
     const text = `🍽️ Save My Dinner Rescue Plan for ${diagnosis.foodIdentified}:\n` +
       `Diagnosis: ${diagnosis.diagnosis}\n\n` +
       `Rescue Steps:\n` +
-      diagnosis.rescuePlan.map((s) => `${s.stepNumber}. ${s.title}: ${s.instruction}`).join('\n') +
-      `\n\nHow to know it worked: ${diagnosis.howToKnowItsWorking.join(', ')}`;
+      (diagnosis.rescuePlan || []).map((s) => `${s.stepNumber}. ${s.title}: ${s.instruction}`).join('\n') +
+      `\n\nHow to know it worked: ${(diagnosis.howToKnowItsWorking || []).join(', ')}`;
 
     navigator.clipboard.writeText(text);
     setCopiedSummary(true);
@@ -298,12 +298,12 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
             <span>Your Rescue Plan</span>
           </div>
           <span className="text-xs text-stone-500 font-medium">
-            {diagnosis.rescuePlan.length} actionable steps
+            {(diagnosis.rescuePlan || []).length} actionable steps
           </span>
         </div>
 
         <div className="space-y-3.5">
-          {diagnosis.rescuePlan.map((step) => (
+          {(diagnosis.rescuePlan || []).map((step) => (
             <div
               key={step.stepNumber}
               className="p-4 rounded-2xl bg-[#FCFAF6] border border-[#EFE8DD] hover:border-emerald-300 transition space-y-2.5"
@@ -366,7 +366,7 @@ export const RescueResultsView: React.FC<RescueResultsViewProps> = ({
         </div>
 
         <ul className="space-y-2.5">
-          {diagnosis.howToKnowItsWorking.map((sign, idx) => (
+          {(diagnosis.howToKnowItsWorking || []).map((sign, idx) => (
             <li
               key={idx}
               className="flex items-start space-x-3 text-stone-800 text-sm leading-relaxed"
