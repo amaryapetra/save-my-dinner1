@@ -6,8 +6,7 @@ An AI-powered emergency culinary troubleshooter web application built with Googl
 ---
 
 ## 📱 Live App Links
-- *- **Live App**: [Save My Dinner](https://save-my-dinner.ai.studio)
-
+- **Live App**: [Save My Dinner](https://save-my-dinner.ai.studio)
 ---
 
 ## 🎯 What the App Does
