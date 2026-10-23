@@ -6,8 +6,7 @@ An AI-powered emergency culinary troubleshooter web application built with Googl
 ---
 
 ## 📱 Live App Links
-- **Shared Public Web App**: [Save My Dinner Live Preview](https://ais-pre-gncui5dtvv33az5clweulj-279845690615.us-west1.run.app)
-- **Development Preview**: [Dev Environment](https://ais-dev-gncui5dtvv33az5clweulj-279845690615.us-west1.run.app)
+- *- **Live App**: [Save My Dinner](https://save-my-dinner.ai.studio)
 
 ---
 
