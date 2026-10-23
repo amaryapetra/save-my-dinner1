@@ -138,24 +138,21 @@ export default function App() {
 
   const [activeSampleLoadingId, setActiveSampleLoadingId] = useState<string | null>(null);
 
-  // Select a preset mishap with real photographic food and auto-validation
+  // Select a preset mishap with auto-validation (text-only diagnosis)
   const handleSelectSampleMishap = async (sample: SampleMishap) => {
     setActiveSampleLoadingId(sample.id);
     setIsSampleScenario(true);
     setDishName(sample.foodName);
     setProblemDescription(sample.description);
     setSelectedIssueCategory(sample.category);
-    setPhotoDataUrl(sample.previewImage);
-    const cleanB64 = sample.previewImage.includes('base64,')
-      ? sample.previewImage.split('base64,')[1]
-      : sample.previewImage;
-    setPhotoBase64(cleanB64);
+    setPhotoDataUrl(null);
+    setPhotoBase64(null);
     setPhotoMimeType('image/jpeg');
     setErrorMessage(null);
 
-    // Directly trigger rescue request with this scenario's verified payload
+    // Directly trigger rescue request with description only (no photo attached)
     await handleRescueSubmit(undefined, {
-      imageBase64: cleanB64,
+      imageBase64: null,
       mimeType: 'image/jpeg',
       problemDescription: sample.description,
       issueCategory: sample.category,
@@ -734,12 +731,16 @@ export default function App() {
                           : 'border-stone-200 hover:border-amber-400 hover:shadow-xs cursor-pointer'
                       }`}
                     >
-                      <div className="w-16 h-16 rounded-xl overflow-hidden bg-stone-100 shrink-0 border border-stone-100">
-                        <img
-                          src={mishap.previewImage}
-                          alt={mishap.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
+                      <div className="w-16 h-16 rounded-xl overflow-hidden bg-amber-50 shrink-0 border border-amber-200/60 flex items-center justify-center text-3xl">
+                        {mishap.id === 'broken-sauce'
+                          ? '🧈'
+                          : mishap.id === 'burning-garlic'
+                          ? '🧄'
+                          : mishap.id === 'watery-stirfry'
+                          ? '🥘'
+                          : mishap.id === 'salty-soup'
+                          ? '🧂'
+                          : '🍳'}
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-xs sm:text-sm font-bold text-stone-900 truncate group-hover:text-[#C2410C] transition-colors">
