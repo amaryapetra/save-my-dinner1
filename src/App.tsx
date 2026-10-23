@@ -21,6 +21,7 @@ import { compressImage, CompressionResult } from './utils/imageCompressor';
 import { useVoiceDictation } from './utils/useVoiceDictation';
 import { CameraCaptureModal } from './components/CameraCaptureModal';
 import { RescueResultsView } from './components/RescueResultsView';
+import { FunMascot } from './components/FunMascot';
 
 import { SAMPLE_MISHAPS } from './data/sampleMishaps';
 
@@ -75,11 +76,11 @@ export default function App() {
 
   // Clean, focused issue chips with warm culinary accents
   const issueOptions = [
-    { label: 'Separated sauce', query: 'The sauce broke into oil with grainy curdled clumps' },
-    { label: 'Garlic burning', query: 'Garlic is catching and turning dark black on the bottom' },
-    { label: 'Too salty', query: 'I added too much salt and the sauce/broth is overwhelmingly salty' },
-    { label: 'Watery / boiling', query: 'Food is pooling in water and steaming instead of getting crispy' },
-    { label: 'Raw inside', query: 'Outside looks browned, but inside is still raw and pink' },
+    { label: 'Separated sauce', query: 'The sauce broke into oil with grainy curdled clumps', emoji: '🧈' },
+    { label: 'Garlic burning', query: 'Garlic is catching and turning dark black on the bottom', emoji: '🧄' },
+    { label: 'Too salty', query: 'I added too much salt and the sauce/broth is overwhelmingly salty', emoji: '🧂' },
+    { label: 'Watery / boiling', query: 'Food is pooling in water and steaming instead of getting crispy', emoji: '💧' },
+    { label: 'Raw inside', query: 'Outside looks browned, but inside is still raw and pink', emoji: '🍗' },
   ];
 
   // Handle image compression when a photo is selected
@@ -507,6 +508,11 @@ export default function App() {
               </p>
             </div>
 
+            {/* Fun Mascot */}
+            <div>
+              <FunMascot />
+            </div>
+
             {/* Unified Troubleshooter Card */}
             <form onSubmit={handleRescueSubmit} className="bg-white rounded-3xl p-5 sm:p-7 border border-stone-200/80 shadow-xs space-y-6">
               
@@ -659,13 +665,14 @@ export default function App() {
                             }
                           }
                         }}
-                        className={`text-xs px-3 py-1.5 rounded-lg border transition cursor-pointer ${
+                        className={`text-xs px-3 py-1.5 rounded-lg border transition cursor-pointer flex items-center space-x-1.5 ${
                           isSelected
                             ? 'bg-stone-900 text-white border-stone-900 font-medium'
                             : 'bg-stone-50 hover:bg-stone-100 text-stone-700 border-stone-200'
                         }`}
                       >
-                        {opt.label}
+                        <span>{opt.emoji}</span>
+                        <span>{opt.label}</span>
                       </button>
                     );
                   })}
@@ -684,7 +691,7 @@ export default function App() {
               >
                 {isLoading ? (
                   <>
-                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <span className="inline-block animate-bounce text-lg">🍳</span>
                     <span>Analyzing your food...</span>
                   </>
                 ) : (
